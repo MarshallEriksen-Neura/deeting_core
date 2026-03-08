@@ -2,8 +2,36 @@ from __future__ import annotations
 
 import pytest
 
+from app.protocols.contracts import ProtocolProfile, RuntimeHook
 from app.services.providers import embedding as embedding_module
 from app.services.providers.embedding import EmbeddingService
+
+
+def _preset_profile_runtime(*, model: str = "db-embedding-model") -> embedding_module._EmbeddingRuntime:
+    return embedding_module._EmbeddingRuntime(
+        model=model,
+        protocol="openai",
+        base_url="https://example.com",
+        profile=ProtocolProfile(
+            profile_id="provider-preset:embedding",
+            provider="openai",
+            protocol_family="openai_chat",
+            capability="embedding",
+            transport={"path": "embeddings"},
+            request={
+                "template_engine": "openai_compat",
+                "request_template": {
+                    "model": None,
+                    "input": None,
+                    "encoding_format": None,
+                },
+            },
+            response={"decoder": RuntimeHook(name="openai_chat")},
+        ),
+        auth_type="bearer",
+        auth_config={},
+        secret="test-secret",
+    )
 
 
 @pytest.mark.asyncio
@@ -53,6 +81,87 @@ async def test_embedding_service_prefers_cached_model_when_not_explicit(monkeypa
         "input": "hello",
     }
     assert service.model == "db-embedding-model"
+
+
+@pytest.mark.asyncio
+async def test_embedding_service_provider_profile_extracts_input_items_into_openai_payload(
+    monkeypatch,
+):
+    captured: dict[str, object] = {}
+
+    async def _fake_cached_model() -> str:
+        return "db-embedding-model"
+
+    async def _fake_resolve_runtime(self, model: str):
+        return _preset_profile_runtime(model=model)
+
+    async def _fake_post(self, request):
+        captured["payload"] = request.body
+        return {"data": [{"embedding": [0.1, 0.2]}]}
+
+    monkeypatch.setattr(
+        embedding_module,
+        "get_cached_embedding_model",
+        _fake_cached_model,
+    )
+    monkeypatch.setattr(
+        EmbeddingService,
+        "_resolve_runtime_from_provider",
+        _fake_resolve_runtime,
+    )
+    monkeypatch.setattr(
+        EmbeddingService,
+        "_post_embeddings_request",
+        _fake_post,
+    )
+
+    service = EmbeddingService()
+
+    await service.embed_text("hello")
+
+    assert captured["payload"] == {
+        "model": "db-embedding-model",
+        "input": "hello",
+    }
+
+
+@pytest.mark.asyncio
+async def test_embedding_service_provider_profile_normalizes_openai_embedding_url(
+    monkeypatch,
+):
+    captured: dict[str, object] = {}
+
+    async def _fake_cached_model() -> str:
+        return "db-embedding-model"
+
+    async def _fake_resolve_runtime(self, model: str):
+        return _preset_profile_runtime(model=model)
+
+    async def _fake_post(self, request):
+        captured["url"] = request.url
+        return {"data": [{"embedding": [0.1, 0.2]}]}
+
+    monkeypatch.setattr(
+        embedding_module,
+        "get_cached_embedding_model",
+        _fake_cached_model,
+    )
+    monkeypatch.setattr(
+        EmbeddingService,
+        "_resolve_runtime_from_provider",
+        _fake_resolve_runtime,
+    )
+    monkeypatch.setattr(
+        EmbeddingService,
+        "_post_embeddings_request",
+        _fake_post,
+    )
+
+    service = EmbeddingService()
+
+    await service.embed_text("hello")
+
+    assert captured["url"] == "https://example.com/v1/embeddings"
 
 
 @pytest.mark.asyncio

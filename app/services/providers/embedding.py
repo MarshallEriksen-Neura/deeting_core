@@ -22,6 +22,7 @@ from app.repositories.provider_instance_repository import (
 from app.repositories.provider_preset_repository import ProviderPresetRepository
 from app.protocols.runtime.profile_resolver import resolve_profile_defaults_from_preset
 from app.services.providers.auth_resolver import resolve_auth_for_protocol
+from app.services.providers.upstream_url import build_upstream_url
 from app.services.secrets.manager import SecretManager
 from app.services.system import get_cached_embedding_model
 
@@ -40,6 +41,7 @@ class _EmbeddingRuntime:
     auth_type: str | None = None
     auth_config: dict[str, Any] | None = None
     secret: str | None = None
+    auto_append_v1: bool | None = None
 
 
 # TODO: Duplicate implementation exists; consider consolidating embedding services.
@@ -81,6 +83,12 @@ class EmbeddingService:
             else {}
         )
         self.api_version = str(config.get("api_version") or "").strip() or None
+        explicit_auto_append_v1 = config.get("auto_append_v1")
+        self.auto_append_v1 = (
+            explicit_auto_append_v1
+            if isinstance(explicit_auto_append_v1, bool)
+            else None
+        )
 
         # Model: Config > Cache > Settings (Default)
         explicit_model = config.get("model")
@@ -197,6 +205,7 @@ class EmbeddingService:
             auth_type=auth_type,
             auth_config=auth_config,
             secret=self.api_key,
+            auto_append_v1=self.auto_append_v1,
         )
 
     async def _resolve_runtime_from_provider(self, model: str) -> _EmbeddingRuntime:
@@ -281,6 +290,11 @@ class EmbeddingService:
                 auth_type=auth_type,
                 auth_config=auth_config,
                 secret=secret,
+                auto_append_v1=(
+                    meta.get("auto_append_v1")
+                    if isinstance(meta.get("auto_append_v1"), bool)
+                    else None
+                ),
             )
 
     @staticmethod
@@ -422,6 +436,15 @@ class EmbeddingService:
         texts: list[str],
     ) -> UpstreamRequest:
         if runtime.profile and runtime.base_url:
+            profile = self._ensure_embedding_request_builder(
+                runtime.profile,
+                protocol=runtime.protocol,
+            )
+            base_url = self._normalize_runtime_base_url(
+                runtime.base_url,
+                protocol=runtime.protocol,
+                auto_append_v1=runtime.auto_append_v1,
+            )
             request = CanonicalRequest(
                 capability="embedding",
                 model=runtime.model,
@@ -433,8 +456,8 @@ class EmbeddingService:
             )
             upstream_request = protocol_runtime_service.build_upstream_request(
                 request,
-                runtime.profile,
-                base_url=runtime.base_url,
+                profile,
+                base_url=base_url,
             )
             headers = {"Content-Type": "application/json"}
             headers.update(
@@ -638,6 +661,37 @@ class EmbeddingService:
     def _is_gemini_like(protocol: str) -> bool:
         proto = (protocol or "").lower()
         return "gemini" in proto or "google" in proto or "vertex" in proto
+
+    def _ensure_embedding_request_builder(
+        self,
+        profile: ProtocolProfile,
+        *,
+        protocol: str,
+    ) -> ProtocolProfile:
+        if profile.request.request_builder is not None:
+            return profile
+
+        normalized = profile.model_copy(deep=True)
+        mode = "gemini" if self._is_gemini_like(protocol) else "openai"
+        normalized.request.request_builder = RuntimeHook(
+            name="embedding_request_from_input_items",
+            config={"mode": mode},
+        )
+        return normalized
+
+    @staticmethod
+    def _normalize_runtime_base_url(
+        base_url: str,
+        *,
+        protocol: str,
+        auto_append_v1: bool | None,
+    ) -> str:
+        return build_upstream_url(
+            base_url,
+            "",
+            protocol,
+            auto_append_v1=auto_append_v1,
+        )
 
     def _build_embedding_profile(
         self,
