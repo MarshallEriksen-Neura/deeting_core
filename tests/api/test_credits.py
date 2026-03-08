@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.models import User
 from app.models.billing import (
     AlipayRechargeOrder,
+    AlipayRechargeOrderStatus,
     BillingTransaction,
     TenantQuota,
     TransactionStatus,
@@ -64,6 +65,15 @@ async def _get_test_user_id(session_factory: async_sessionmaker[AsyncSession]) -
         result = await session.execute(
             select(User).where(User.email == "testuser@example.com")
         )
+        user = result.scalar_one()
+        return user.id
+
+
+async def _get_user_id(
+    session_factory: async_sessionmaker[AsyncSession], email: str
+) -> UUID:
+    async with session_factory() as session:
+        result = await session.execute(select(User).where(User.email == email))
         user = result.scalar_one()
         return user.id
 
@@ -285,6 +295,212 @@ async def test_credits_transactions_pagination(
     data = resp.json()
     assert len(data["items"]) == 2
     assert data["nextOffset"] == 2
+
+
+@pytest.mark.asyncio
+async def test_list_recharge_orders_returns_current_user_history(
+    client: AsyncClient,
+    auth_tokens: dict,
+    AsyncSessionLocal,
+) -> None:
+    user_id = await _get_test_user_id(AsyncSessionLocal)
+    admin_id = await _get_user_id(AsyncSessionLocal, "admin@example.com")
+    await _clear_user_data(AsyncSessionLocal, user_id)
+    await _clear_user_data(AsyncSessionLocal, admin_id)
+
+    now = Datetime.now()
+    async with AsyncSessionLocal() as session:
+        session.add_all(
+            [
+                AlipayRechargeOrder(
+                    tenant_id=user_id,
+                    out_trade_no="alipay-user-success",
+                    trade_no="202603080001",
+                    status=AlipayRechargeOrderStatus.SUCCESS,
+                    trade_status="TRADE_SUCCESS",
+                    amount=Decimal("3.00"),
+                    currency="CNY",
+                    credit_per_unit=Decimal("20.000000"),
+                    expected_credited_amount=Decimal("60.000000"),
+                    created_at=now,
+                    settled_at=now,
+                ),
+                AlipayRechargeOrder(
+                    tenant_id=user_id,
+                    out_trade_no="alipay-user-pending",
+                    status=AlipayRechargeOrderStatus.PENDING,
+                    trade_status="WAIT_BUYER_PAY",
+                    amount=Decimal("5.00"),
+                    currency="CNY",
+                    credit_per_unit=Decimal("20.000000"),
+                    expected_credited_amount=Decimal("100.000000"),
+                    created_at=now - timedelta(minutes=5),
+                ),
+                AlipayRechargeOrder(
+                    tenant_id=admin_id,
+                    out_trade_no="alipay-admin-hidden",
+                    status=AlipayRechargeOrderStatus.SUCCESS,
+                    trade_status="TRADE_SUCCESS",
+                    amount=Decimal("9.00"),
+                    currency="CNY",
+                    credit_per_unit=Decimal("20.000000"),
+                    expected_credited_amount=Decimal("180.000000"),
+                    created_at=now - timedelta(minutes=10),
+                ),
+            ]
+        )
+        await session.commit()
+
+    resp = await client.get(
+        "/api/v1/credits/recharge/orders",
+        headers={"Authorization": f"Bearer {auth_tokens['access_token']}"},
+    )
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["nextOffset"] is None
+    assert [item["outTradeNo"] for item in payload["items"]] == [
+        "alipay-user-success",
+        "alipay-user-pending",
+    ]
+    assert payload["items"][0]["status"] == "success"
+    assert payload["items"][0]["creditedAmount"] == 60
+    assert payload["items"][0]["channel"] == "alipay"
+    assert payload["items"][1]["status"] == "pending"
+    assert payload["items"][1]["creditedAmount"] == 0
+
+
+@pytest.mark.asyncio
+async def test_list_recharge_orders_supports_status_filter(
+    client: AsyncClient,
+    auth_tokens: dict,
+    AsyncSessionLocal,
+) -> None:
+    user_id = await _get_test_user_id(AsyncSessionLocal)
+    await _clear_user_data(AsyncSessionLocal, user_id)
+
+    now = Datetime.now()
+    async with AsyncSessionLocal() as session:
+        session.add_all(
+            [
+                AlipayRechargeOrder(
+                    tenant_id=user_id,
+                    out_trade_no="alipay-filter-success",
+                    status=AlipayRechargeOrderStatus.SUCCESS,
+                    trade_status="TRADE_SUCCESS",
+                    amount=Decimal("3.00"),
+                    currency="CNY",
+                    credit_per_unit=Decimal("20.000000"),
+                    expected_credited_amount=Decimal("60.000000"),
+                    created_at=now,
+                ),
+                AlipayRechargeOrder(
+                    tenant_id=user_id,
+                    out_trade_no="alipay-filter-pending",
+                    status=AlipayRechargeOrderStatus.PENDING,
+                    trade_status="WAIT_BUYER_PAY",
+                    amount=Decimal("5.00"),
+                    currency="CNY",
+                    credit_per_unit=Decimal("20.000000"),
+                    expected_credited_amount=Decimal("100.000000"),
+                    created_at=now - timedelta(minutes=3),
+                ),
+            ]
+        )
+        await session.commit()
+
+    resp = await client.get(
+        "/api/v1/credits/recharge/orders",
+        params={"status": "pending"},
+        headers={"Authorization": f"Bearer {auth_tokens['access_token']}"},
+    )
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert [item["outTradeNo"] for item in payload["items"]] == ["alipay-filter-pending"]
+
+
+@pytest.mark.asyncio
+async def test_list_recharge_orders_supports_date_range_and_pagination(
+    client: AsyncClient,
+    auth_tokens: dict,
+    AsyncSessionLocal,
+) -> None:
+    user_id = await _get_test_user_id(AsyncSessionLocal)
+    await _clear_user_data(AsyncSessionLocal, user_id)
+
+    now = Datetime.now()
+    async with AsyncSessionLocal() as session:
+        session.add_all(
+            [
+                AlipayRechargeOrder(
+                    tenant_id=user_id,
+                    out_trade_no="alipay-range-recent",
+                    status=AlipayRechargeOrderStatus.SUCCESS,
+                    trade_status="TRADE_SUCCESS",
+                    amount=Decimal("3.00"),
+                    currency="CNY",
+                    credit_per_unit=Decimal("20.000000"),
+                    expected_credited_amount=Decimal("60.000000"),
+                    created_at=now - timedelta(days=1),
+                ),
+                AlipayRechargeOrder(
+                    tenant_id=user_id,
+                    out_trade_no="alipay-range-older",
+                    status=AlipayRechargeOrderStatus.PENDING,
+                    trade_status="WAIT_BUYER_PAY",
+                    amount=Decimal("5.00"),
+                    currency="CNY",
+                    credit_per_unit=Decimal("20.000000"),
+                    expected_credited_amount=Decimal("100.000000"),
+                    created_at=now - timedelta(days=3),
+                ),
+                AlipayRechargeOrder(
+                    tenant_id=user_id,
+                    out_trade_no="alipay-range-outside",
+                    status=AlipayRechargeOrderStatus.FAILED,
+                    trade_status="TRADE_CLOSED",
+                    amount=Decimal("7.00"),
+                    currency="CNY",
+                    credit_per_unit=Decimal("20.000000"),
+                    expected_credited_amount=Decimal("140.000000"),
+                    created_at=now - timedelta(days=10),
+                ),
+            ]
+        )
+        await session.commit()
+
+    params = {
+        "startDate": (now - timedelta(days=4)).date().isoformat(),
+        "endDate": now.date().isoformat(),
+        "limit": 1,
+    }
+
+    first_page = await client.get(
+        "/api/v1/credits/recharge/orders",
+        params=params,
+        headers={"Authorization": f"Bearer {auth_tokens['access_token']}"},
+    )
+
+    assert first_page.status_code == 200
+    first_payload = first_page.json()
+    assert [item["outTradeNo"] for item in first_payload["items"]] == [
+        "alipay-range-recent"
+    ]
+    assert first_payload["nextOffset"] == 1
+
+    second_page = await client.get(
+        "/api/v1/credits/recharge/orders",
+        params={**params, "offset": 1},
+        headers={"Authorization": f"Bearer {auth_tokens['access_token']}"},
+    )
+
+    assert second_page.status_code == 200
+    second_payload = second_page.json()
+    assert [item["outTradeNo"] for item in second_payload["items"]] == [
+        "alipay-range-older"
+    ]
+    assert second_payload["nextOffset"] is None
 
 
 @pytest.mark.asyncio

@@ -87,6 +87,26 @@ class CreditsAlipayOrderStatusResponse(BaseSchema):
     refreshed: bool = False
 
 
+class CreditsRechargeOrderItem(BaseSchema):
+    id: str
+    out_trade_no: str = Field(..., alias="outTradeNo")
+    trade_no: str | None = Field(None, alias="tradeNo")
+    status: str
+    trade_status: str | None = Field(None, alias="tradeStatus")
+    amount: float
+    currency: str
+    expected_credited_amount: float = Field(..., alias="expectedCreditedAmount")
+    credited_amount: float = Field(0, alias="creditedAmount")
+    channel: str
+    created_at: datetime = Field(..., alias="createdAt")
+    settled_at: datetime | None = Field(None, alias="settledAt")
+
+
+class CreditsRechargeOrderListResponse(BaseSchema):
+    items: list[CreditsRechargeOrderItem]
+    next_offset: int | None = Field(None, alias="nextOffset")
+
+
 class CreditsRechargeResponse(BaseSchema):
     amount: float
     credited_amount: float = Field(..., alias="creditedAmount")

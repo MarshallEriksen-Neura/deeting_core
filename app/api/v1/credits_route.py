@@ -1,6 +1,7 @@
 import hashlib
 import logging
 import uuid
+from datetime import date
 from decimal import Decimal
 from typing import Any
 
@@ -41,6 +42,7 @@ from app.schemas.credits import (
     CreditsModelUsageResponse,
     CreditsPlatformModel,
     CreditsPlatformModelsResponse,
+    CreditsRechargeOrderListResponse,
     CreditsRechargePolicyResponse,
     CreditsRechargeRequest,
     CreditsRechargeResponse,
@@ -319,6 +321,26 @@ async def get_transactions(
 ) -> CreditsTransactionListResponse:
     return await svc.list_transactions(
         str(current_user.id) if current_user else None, limit, offset
+    )
+
+
+@router.get("/recharge/orders", response_model=CreditsRechargeOrderListResponse)
+async def get_recharge_orders(
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    status_filter: AlipayRechargeOrderStatus | None = Query(None, alias="status"),
+    start_date: date | None = Query(None, alias="startDate"),
+    end_date: date | None = Query(None, alias="endDate"),
+    current_user: User = Depends(get_current_user),
+    svc: CreditsService = Depends(get_credits_service),
+) -> CreditsRechargeOrderListResponse:
+    return await svc.list_recharge_orders(
+        str(current_user.id) if current_user else None,
+        limit,
+        offset,
+        status_filter,
+        start_date,
+        end_date,
     )
 
 

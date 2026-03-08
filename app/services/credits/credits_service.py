@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Iterable
-from datetime import timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 from sqlalchemy import func, select
@@ -10,7 +10,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.cache import cache
 from app.core.cache_keys import CacheKeys
-from app.models.billing import BillingTransaction, TransactionStatus, TransactionType
+from app.models.billing import (
+    AlipayRechargeOrder,
+    AlipayRechargeOrderStatus,
+    BillingTransaction,
+    TransactionStatus,
+    TransactionType,
+)
 from app.repositories.billing_repository import BillingRepository
 from app.repositories.quota_repository import QuotaRepository
 from app.schemas.credits import (
@@ -19,6 +25,8 @@ from app.schemas.credits import (
     CreditsConsumptionResponse,
     CreditsModelUsageItem,
     CreditsModelUsageResponse,
+    CreditsRechargeOrderItem,
+    CreditsRechargeOrderListResponse,
     CreditsRechargeResponse,
     CreditsTransactionItem,
     CreditsTransactionListResponse,
@@ -246,6 +254,82 @@ class CreditsService:
             currency=currency,
             trace_id=trace_id,
         )
+
+    async def list_recharge_orders(
+        self,
+        tenant_id: str | None,
+        limit: int = 20,
+        offset: int = 0,
+        status_filter: AlipayRechargeOrderStatus | None = None,
+        start_date: date | None = None,
+        end_date: date | None = None,
+    ) -> CreditsRechargeOrderListResponse:
+        limit = max(1, min(limit, 100))
+        offset = max(0, offset)
+        if not tenant_id:
+            return CreditsRechargeOrderListResponse(items=[], next_offset=None)
+
+        _, tenant_uuid = self._normalize_tenant_id(tenant_id)
+        stmt = (
+            select(AlipayRechargeOrder)
+            .where(AlipayRechargeOrder.tenant_id == tenant_uuid)
+            .order_by(AlipayRechargeOrder.created_at.desc())
+            .limit(limit + 1)
+            .offset(offset)
+        )
+        if status_filter is not None:
+            stmt = stmt.where(AlipayRechargeOrder.status == status_filter)
+        if start_date is not None:
+            stmt = stmt.where(
+                AlipayRechargeOrder.created_at
+                >= datetime(
+                    start_date.year,
+                    start_date.month,
+                    start_date.day,
+                    tzinfo=UTC,
+                )
+            )
+        if end_date is not None:
+            stmt = stmt.where(
+                AlipayRechargeOrder.created_at
+                < datetime(
+                    end_date.year,
+                    end_date.month,
+                    end_date.day,
+                    tzinfo=UTC,
+                )
+                + timedelta(days=1)
+            )
+
+        orders = list((await self.session.execute(stmt)).scalars().all())
+        has_more = len(orders) > limit
+        if has_more:
+            orders = orders[:limit]
+
+        items = [
+            CreditsRechargeOrderItem(
+                id=str(order.id),
+                out_trade_no=order.out_trade_no,
+                trade_no=order.trade_no,
+                status=order.status.value,
+                trade_status=order.trade_status,
+                amount=float(order.amount),
+                currency=order.currency,
+                expected_credited_amount=float(order.expected_credited_amount),
+                credited_amount=(
+                    float(order.expected_credited_amount)
+                    if order.status == AlipayRechargeOrderStatus.SUCCESS
+                    else 0.0
+                ),
+                channel="alipay",
+                created_at=order.created_at,
+                settled_at=order.settled_at,
+            )
+            for order in orders
+        ]
+
+        next_offset = offset + limit if has_more else None
+        return CreditsRechargeOrderListResponse(items=items, next_offset=next_offset)
 
     async def recharge_with_trace_id(
         self,
