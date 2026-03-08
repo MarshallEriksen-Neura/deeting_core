@@ -13,6 +13,7 @@ from httpx import AsyncClient
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.core.config import settings
 from app.models import User
 from app.models.billing import (
     AlipayRechargeOrder,
@@ -58,6 +59,17 @@ def _sign_alipay_notify_payload(payload: dict[str, str], private_key_pem: str) -
         hashes.SHA256(),
     )
     return base64.b64encode(signature).decode("utf-8")
+
+
+@pytest.fixture(autouse=True)
+def _jwt_keypair_files(tmp_path, monkeypatch):
+    private_pem, public_pem = _generate_rsa_keypair()
+    private_path = tmp_path / "private.pem"
+    public_path = tmp_path / "public.pem"
+    private_path.write_text(private_pem)
+    public_path.write_text(public_pem)
+    monkeypatch.setattr(settings, "JWT_PRIVATE_KEY_PATH", str(private_path))
+    monkeypatch.setattr(settings, "JWT_PUBLIC_KEY_PATH", str(public_path))
 
 
 async def _get_test_user_id(session_factory: async_sessionmaker[AsyncSession]) -> UUID:
