@@ -98,6 +98,9 @@ class CreditsRechargeOrderItem(BaseSchema):
     expected_credited_amount: float = Field(..., alias="expectedCreditedAmount")
     credited_amount: float = Field(0, alias="creditedAmount")
     channel: str
+    error_code: str | None = Field(None, alias="errorCode")
+    error_detail: str | None = Field(None, alias="errorDetail")
+    failure_reason: str | None = Field(None, alias="failureReason")
     created_at: datetime = Field(..., alias="createdAt")
     settled_at: datetime | None = Field(None, alias="settledAt")
 

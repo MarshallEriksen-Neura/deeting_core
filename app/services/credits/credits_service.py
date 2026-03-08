@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import csv
 import uuid
 from collections.abc import Iterable
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from io import StringIO
 
-from sqlalchemy import func, select
+from typing import Literal
+
+from sqlalchemy import asc, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.cache import cache
@@ -37,6 +41,13 @@ from app.utils.time_utils import Datetime
 class CreditsService:
     """积分/计费数据聚合服务。"""
 
+    FAILURE_REASON_MAP = {
+        "ACQ.TRADE_NOT_EXIST": "Payment order was closed or never completed.",
+        "ACQ.SYSTEM_ERROR": "Payment provider temporarily failed to process the recharge.",
+        "TRADE_CLOSED": "The trade was closed before payment completed.",
+        "WAIT_BUYER_PAY": "The recharge is still waiting for payment.",
+    }
+
     def __init__(self, session: AsyncSession):
         self.session = session
         self.quota_repo = QuotaRepository(session)
@@ -48,6 +59,82 @@ class CreditsService:
         if isinstance(tenant_id, uuid.UUID):
             return str(tenant_id), tenant_id
         return tenant_id, uuid.UUID(tenant_id)
+
+    @classmethod
+    def _resolve_failure_reason(cls, order: AlipayRechargeOrder) -> str | None:
+        if order.status != AlipayRechargeOrderStatus.FAILED:
+            return None
+        if order.error_detail:
+            return order.error_detail
+        if order.error_code and order.error_code in cls.FAILURE_REASON_MAP:
+            return cls.FAILURE_REASON_MAP[order.error_code]
+        if order.trade_status and order.trade_status in cls.FAILURE_REASON_MAP:
+            return cls.FAILURE_REASON_MAP[order.trade_status]
+        return order.error_code or order.trade_status or "Recharge failed."
+
+    def _build_recharge_orders_stmt(
+        self,
+        tenant_uuid: uuid.UUID,
+        status_filter: AlipayRechargeOrderStatus | None = None,
+        start_date: date | None = None,
+        end_date: date | None = None,
+        query: str | None = None,
+        sort_by: Literal["time", "amount"] = "time",
+        sort_direction: Literal["asc", "desc"] = "desc",
+    ):
+        stmt = select(AlipayRechargeOrder).where(AlipayRechargeOrder.tenant_id == tenant_uuid)
+        if status_filter is not None:
+            stmt = stmt.where(AlipayRechargeOrder.status == status_filter)
+        if start_date is not None:
+            stmt = stmt.where(
+                AlipayRechargeOrder.created_at
+                >= datetime(start_date.year, start_date.month, start_date.day, tzinfo=UTC)
+            )
+        if end_date is not None:
+            stmt = stmt.where(
+                AlipayRechargeOrder.created_at
+                < datetime(end_date.year, end_date.month, end_date.day, tzinfo=UTC)
+                + timedelta(days=1)
+            )
+        if query:
+            normalized_query = f"%{query.strip().lower()}%"
+            stmt = stmt.where(
+                or_(
+                    func.lower(AlipayRechargeOrder.out_trade_no).like(normalized_query),
+                    func.lower(func.coalesce(AlipayRechargeOrder.trade_no, "")).like(
+                        normalized_query
+                    ),
+                )
+            )
+
+        sort_column = (
+            AlipayRechargeOrder.amount if sort_by == "amount" else AlipayRechargeOrder.created_at
+        )
+        sort_fn = asc if sort_direction == "asc" else desc
+        return stmt.order_by(sort_fn(sort_column), desc(AlipayRechargeOrder.created_at))
+
+    def _serialize_recharge_order(self, order: AlipayRechargeOrder) -> CreditsRechargeOrderItem:
+        return CreditsRechargeOrderItem(
+            id=str(order.id),
+            out_trade_no=order.out_trade_no,
+            trade_no=order.trade_no,
+            status=order.status.value,
+            trade_status=order.trade_status,
+            amount=float(order.amount),
+            currency=order.currency,
+            expected_credited_amount=float(order.expected_credited_amount),
+            credited_amount=(
+                float(order.expected_credited_amount)
+                if order.status == AlipayRechargeOrderStatus.SUCCESS
+                else 0.0
+            ),
+            channel="alipay",
+            error_code=order.error_code,
+            error_detail=order.error_detail,
+            failure_reason=self._resolve_failure_reason(order),
+            created_at=order.created_at,
+            settled_at=order.settled_at,
+        )
 
     async def get_balance(self, tenant_id: str | None) -> CreditsBalanceResponse:
         if not tenant_id:
@@ -263,6 +350,9 @@ class CreditsService:
         status_filter: AlipayRechargeOrderStatus | None = None,
         start_date: date | None = None,
         end_date: date | None = None,
+        query: str | None = None,
+        sort_by: Literal["time", "amount"] = "time",
+        sort_direction: Literal["asc", "desc"] = "desc",
     ) -> CreditsRechargeOrderListResponse:
         limit = max(1, min(limit, 100))
         offset = max(0, offset)
@@ -270,66 +360,88 @@ class CreditsService:
             return CreditsRechargeOrderListResponse(items=[], next_offset=None)
 
         _, tenant_uuid = self._normalize_tenant_id(tenant_id)
-        stmt = (
-            select(AlipayRechargeOrder)
-            .where(AlipayRechargeOrder.tenant_id == tenant_uuid)
-            .order_by(AlipayRechargeOrder.created_at.desc())
-            .limit(limit + 1)
-            .offset(offset)
-        )
-        if status_filter is not None:
-            stmt = stmt.where(AlipayRechargeOrder.status == status_filter)
-        if start_date is not None:
-            stmt = stmt.where(
-                AlipayRechargeOrder.created_at
-                >= datetime(
-                    start_date.year,
-                    start_date.month,
-                    start_date.day,
-                    tzinfo=UTC,
-                )
-            )
-        if end_date is not None:
-            stmt = stmt.where(
-                AlipayRechargeOrder.created_at
-                < datetime(
-                    end_date.year,
-                    end_date.month,
-                    end_date.day,
-                    tzinfo=UTC,
-                )
-                + timedelta(days=1)
-            )
+        stmt = self._build_recharge_orders_stmt(
+            tenant_uuid,
+            status_filter,
+            start_date,
+            end_date,
+            query,
+            sort_by,
+            sort_direction,
+        ).limit(limit + 1).offset(offset)
 
         orders = list((await self.session.execute(stmt)).scalars().all())
         has_more = len(orders) > limit
         if has_more:
             orders = orders[:limit]
 
-        items = [
-            CreditsRechargeOrderItem(
-                id=str(order.id),
-                out_trade_no=order.out_trade_no,
-                trade_no=order.trade_no,
-                status=order.status.value,
-                trade_status=order.trade_status,
-                amount=float(order.amount),
-                currency=order.currency,
-                expected_credited_amount=float(order.expected_credited_amount),
-                credited_amount=(
-                    float(order.expected_credited_amount)
-                    if order.status == AlipayRechargeOrderStatus.SUCCESS
-                    else 0.0
-                ),
-                channel="alipay",
-                created_at=order.created_at,
-                settled_at=order.settled_at,
-            )
-            for order in orders
-        ]
+        items = [self._serialize_recharge_order(order) for order in orders]
 
         next_offset = offset + limit if has_more else None
         return CreditsRechargeOrderListResponse(items=items, next_offset=next_offset)
+
+    async def export_recharge_orders_csv(
+        self,
+        tenant_id: str | None,
+        status_filter: AlipayRechargeOrderStatus | None = None,
+        start_date: date | None = None,
+        end_date: date | None = None,
+        query: str | None = None,
+        sort_by: Literal["time", "amount"] = "time",
+        sort_direction: Literal["asc", "desc"] = "desc",
+    ) -> str:
+        if not tenant_id:
+            return ""
+
+        _, tenant_uuid = self._normalize_tenant_id(tenant_id)
+        stmt = self._build_recharge_orders_stmt(
+            tenant_uuid,
+            status_filter,
+            start_date,
+            end_date,
+            query,
+            sort_by,
+            sort_direction,
+        )
+        orders = list((await self.session.execute(stmt)).scalars().all())
+
+        buffer = StringIO()
+        writer = csv.writer(buffer)
+        writer.writerow(
+            [
+                "outTradeNo",
+                "status",
+                "tradeStatus",
+                "amount",
+                "creditedAmount",
+                "currency",
+                "tradeNo",
+                "channel",
+                "failureReason",
+                "createdAt",
+                "settledAt",
+            ]
+        )
+
+        for order in orders:
+            item = self._serialize_recharge_order(order)
+            writer.writerow(
+                [
+                    item.out_trade_no,
+                    item.status,
+                    item.trade_status or "",
+                    item.amount,
+                    item.credited_amount,
+                    item.currency,
+                    item.trade_no or "",
+                    item.channel,
+                    item.failure_reason or "",
+                    item.created_at.isoformat(),
+                    item.settled_at.isoformat() if item.settled_at else "",
+                ]
+            )
+
+        return buffer.getvalue()
 
     async def recharge_with_trace_id(
         self,

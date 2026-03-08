@@ -516,6 +516,124 @@ async def test_list_recharge_orders_supports_date_range_and_pagination(
 
 
 @pytest.mark.asyncio
+async def test_list_recharge_orders_supports_query_sort_and_failure_reason(
+    client: AsyncClient,
+    auth_tokens: dict,
+    AsyncSessionLocal,
+) -> None:
+    user_id = await _get_test_user_id(AsyncSessionLocal)
+    await _clear_user_data(AsyncSessionLocal, user_id)
+
+    now = Datetime.now()
+    async with AsyncSessionLocal() as session:
+        session.add_all(
+            [
+                AlipayRechargeOrder(
+                    tenant_id=user_id,
+                    out_trade_no="receipt-small",
+                    trade_no="trade-small",
+                    status=AlipayRechargeOrderStatus.SUCCESS,
+                    trade_status="TRADE_SUCCESS",
+                    amount=Decimal("2.00"),
+                    currency="CNY",
+                    credit_per_unit=Decimal("20.000000"),
+                    expected_credited_amount=Decimal("40.000000"),
+                    created_at=now - timedelta(minutes=2),
+                ),
+                AlipayRechargeOrder(
+                    tenant_id=user_id,
+                    out_trade_no="receipt-failed",
+                    trade_no="trade-failed-001",
+                    status=AlipayRechargeOrderStatus.FAILED,
+                    trade_status="TRADE_CLOSED",
+                    amount=Decimal("8.00"),
+                    currency="CNY",
+                    credit_per_unit=Decimal("20.000000"),
+                    expected_credited_amount=Decimal("160.000000"),
+                    error_code="ACQ.TRADE_NOT_EXIST",
+                    error_detail="Buyer closed the order before payment.",
+                    created_at=now - timedelta(minutes=1),
+                ),
+            ]
+        )
+        await session.commit()
+
+    resp = await client.get(
+        "/api/v1/credits/recharge/orders",
+        params={
+            "query": "trade-failed",
+            "sortBy": "amount",
+            "sortDirection": "desc",
+        },
+        headers={"Authorization": f"Bearer {auth_tokens['access_token']}"},
+    )
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert [item["outTradeNo"] for item in payload["items"]] == ["receipt-failed"]
+    assert payload["items"][0]["errorCode"] == "ACQ.TRADE_NOT_EXIST"
+    assert payload["items"][0]["failureReason"] == "Buyer closed the order before payment."
+
+
+@pytest.mark.asyncio
+async def test_export_recharge_orders_csv_supports_filters_and_mapped_failure_reason(
+    client: AsyncClient,
+    auth_tokens: dict,
+    AsyncSessionLocal,
+) -> None:
+    user_id = await _get_test_user_id(AsyncSessionLocal)
+    await _clear_user_data(AsyncSessionLocal, user_id)
+
+    now = Datetime.now()
+    async with AsyncSessionLocal() as session:
+        session.add_all(
+            [
+                AlipayRechargeOrder(
+                    tenant_id=user_id,
+                    out_trade_no="csv-success",
+                    trade_no="csv-trade-success",
+                    status=AlipayRechargeOrderStatus.SUCCESS,
+                    trade_status="TRADE_SUCCESS",
+                    amount=Decimal("3.00"),
+                    currency="CNY",
+                    credit_per_unit=Decimal("20.000000"),
+                    expected_credited_amount=Decimal("60.000000"),
+                    created_at=now - timedelta(minutes=2),
+                ),
+                AlipayRechargeOrder(
+                    tenant_id=user_id,
+                    out_trade_no="csv-failed",
+                    trade_no="csv-trade-failed",
+                    status=AlipayRechargeOrderStatus.FAILED,
+                    trade_status="TRADE_CLOSED",
+                    amount=Decimal("7.00"),
+                    currency="CNY",
+                    credit_per_unit=Decimal("20.000000"),
+                    expected_credited_amount=Decimal("140.000000"),
+                    error_code="ACQ.TRADE_NOT_EXIST",
+                    created_at=now - timedelta(minutes=1),
+                ),
+            ]
+        )
+        await session.commit()
+
+    resp = await client.get(
+        "/api/v1/credits/recharge/orders/export",
+        params={"status": "failed", "query": "csv-trade-failed"},
+        headers={"Authorization": f"Bearer {auth_tokens['access_token']}"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/csv")
+    assert "attachment; filename=\"recharge-orders.csv\"" == resp.headers[
+        "content-disposition"
+    ]
+    assert "csv-failed" in resp.text
+    assert "Payment order was closed or never completed." in resp.text
+    assert "csv-success" not in resp.text
+
+
+@pytest.mark.asyncio
 async def test_credits_recharge_updates_balance(
     client: AsyncClient,
     auth_tokens: dict,

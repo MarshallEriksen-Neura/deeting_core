@@ -3,7 +3,7 @@ import logging
 import uuid
 from datetime import date
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -331,6 +331,9 @@ async def get_recharge_orders(
     status_filter: AlipayRechargeOrderStatus | None = Query(None, alias="status"),
     start_date: date | None = Query(None, alias="startDate"),
     end_date: date | None = Query(None, alias="endDate"),
+    query: str | None = Query(None, alias="query"),
+    sort_by: Literal["time", "amount"] = Query("time", alias="sortBy"),
+    sort_direction: Literal["asc", "desc"] = Query("desc", alias="sortDirection"),
     current_user: User = Depends(get_current_user),
     svc: CreditsService = Depends(get_credits_service),
 ) -> CreditsRechargeOrderListResponse:
@@ -341,6 +344,38 @@ async def get_recharge_orders(
         status_filter,
         start_date,
         end_date,
+        query,
+        sort_by,
+        sort_direction,
+    )
+
+
+@router.get("/recharge/orders/export")
+async def export_recharge_orders(
+    status_filter: AlipayRechargeOrderStatus | None = Query(None, alias="status"),
+    start_date: date | None = Query(None, alias="startDate"),
+    end_date: date | None = Query(None, alias="endDate"),
+    query: str | None = Query(None, alias="query"),
+    sort_by: Literal["time", "amount"] = Query("time", alias="sortBy"),
+    sort_direction: Literal["asc", "desc"] = Query("desc", alias="sortDirection"),
+    current_user: User = Depends(get_current_user),
+    svc: CreditsService = Depends(get_credits_service),
+) -> PlainTextResponse:
+    csv_text = await svc.export_recharge_orders_csv(
+        str(current_user.id) if current_user else None,
+        status_filter,
+        start_date,
+        end_date,
+        query,
+        sort_by,
+        sort_direction,
+    )
+    return PlainTextResponse(
+        csv_text,
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": 'attachment; filename="recharge-orders.csv"',
+        },
     )
 
 
