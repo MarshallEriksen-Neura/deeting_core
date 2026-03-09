@@ -55,14 +55,10 @@ class _FakeSelfHeal:
             manifest = dict(skill.manifest_json or {})
             metrics = dict(manifest.get("metrics") or {})
             history = list(metrics.get("self_heal_history") or [])
-            history.append(
-                {"status": self.status, "changes": ["usage_spec.example_code"]}
-            )
+            history.append({"status": self.status, "changes": ["usage_spec.example_code"]})
             metrics["self_heal_history"] = history
             manifest["metrics"] = metrics
-            await self.repo.update(
-                skill, {"status": "active", "manifest_json": manifest}
-            )
+            await self.repo.update(skill, {"status": "active", "manifest_json": manifest})
         return {
             "request": {"skill_id": skill_id, "manifest_json": {}},
             "response": {"status": self.status, "patches": [], "updated_manifest": {}},
@@ -78,9 +74,7 @@ async def test_dry_run_success_sets_active():
                 "id": "core.tools.docx.success",
                 "name": "Docx",
                 "manifest_json": {
-                    "artifacts": [
-                        {"name": "output_docx", "type": "file", "path": "out.docx"}
-                    ],
+                    "artifacts": [{"name": "output_docx", "type": "file", "path": "out.docx"}],
                 },
             }
         )
@@ -112,6 +106,49 @@ async def test_dry_run_success_sets_active():
 
 
 @pytest.mark.asyncio
+async def test_dry_run_success_requires_admin_review_for_market_submission():
+    async with AsyncSessionLocal() as session:
+        repo = SkillRegistryRepository(session)
+        created = await repo.create(
+            {
+                "id": "core.tools.docx.market.review",
+                "name": "Docx",
+                "manifest_json": {
+                    "artifacts": [{"name": "output_docx", "type": "file", "path": "out.docx"}],
+                    "deeting_ingestion": {
+                        "submission_channel": "plugin_market",
+                        "requires_admin_approval": True,
+                    },
+                },
+            }
+        )
+        executor = _FakeExecutor(
+            {
+                "stdout": ["ok"],
+                "stderr": [],
+                "artifacts": [
+                    {
+                        "name": "output_docx",
+                        "type": "file",
+                        "path": "/workspace/out.docx",
+                        "size": 10,
+                        "content_base64": "ZmlsZQ==",
+                    }
+                ],
+            }
+        )
+        metrics = SkillMetricsService(repo, failure_threshold=2)
+        service = SkillDryRunService(repo, executor, metrics, failure_threshold=2)
+
+        result = await service.run(created.id)
+        updated = await repo.get_by_id(created.id)
+
+        assert result["status"] == "needs_review"
+        assert updated is not None
+        assert updated.status == "needs_review"
+
+
+@pytest.mark.asyncio
 async def test_dry_run_missing_artifact_marks_fail():
     async with AsyncSessionLocal() as session:
         repo = SkillRegistryRepository(session)
@@ -120,9 +157,7 @@ async def test_dry_run_missing_artifact_marks_fail():
                 "id": "core.tools.docx.fail",
                 "name": "Docx",
                 "manifest_json": {
-                    "artifacts": [
-                        {"name": "output_docx", "type": "file", "path": "out.docx"}
-                    ],
+                    "artifacts": [{"name": "output_docx", "type": "file", "path": "out.docx"}],
                 },
             }
         )
@@ -148,9 +183,7 @@ async def test_dry_run_threshold_triggers_needs_review():
                 "id": "core.tools.docx.review",
                 "name": "Docx",
                 "manifest_json": {
-                    "artifacts": [
-                        {"name": "output_docx", "type": "file", "path": "out.docx"}
-                    ],
+                    "artifacts": [{"name": "output_docx", "type": "file", "path": "out.docx"}],
                 },
             }
         )
@@ -176,9 +209,7 @@ async def test_dry_run_triggers_self_heal_on_failure():
                 "id": "core.tools.docx.selfheal",
                 "name": "Docx",
                 "manifest_json": {
-                    "artifacts": [
-                        {"name": "output_docx", "type": "file", "path": "out.docx"}
-                    ],
+                    "artifacts": [{"name": "output_docx", "type": "file", "path": "out.docx"}],
                 },
             }
         )
@@ -212,9 +243,7 @@ async def test_dry_run_skips_self_heal_after_max_attempts():
                 "id": "core.tools.docx.selfheal.skip",
                 "name": "Docx",
                 "manifest_json": {
-                    "artifacts": [
-                        {"name": "output_docx", "type": "file", "path": "out.docx"}
-                    ],
+                    "artifacts": [{"name": "output_docx", "type": "file", "path": "out.docx"}],
                     "metrics": {
                         "self_heal_history": [
                             {"status": "failed"},

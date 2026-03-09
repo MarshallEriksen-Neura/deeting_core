@@ -389,6 +389,7 @@ async def _run_repo_ingestion(
     runtime_hint: str | None = None,
     source_subdir: str | None = None,
     user_id: str | None = None,
+    submission_channel: str | None = None,
 ) -> dict:
     from app.services.skill_registry.manifest_generator import SkillManifestGenerator
     from app.services.skill_registry.parsers.deeting_plugin import DeetingPluginParser
@@ -425,6 +426,7 @@ async def _run_repo_ingestion(
             runtime_hint=runtime_hint,
             source_subdir=source_subdir,
             user_id=user_id,
+            submission_channel=submission_channel,
         )
 
         await push_task_progress(
@@ -441,6 +443,7 @@ def ingest_skill_repo(
     runtime_hint: str | None = None,
     source_subdir: str | None = None,
     user_id: str | None = None,
+    submission_channel: str | None = None,
 ) -> dict | str:
     try:
         result = run_async(
@@ -451,6 +454,7 @@ def ingest_skill_repo(
                 runtime_hint=runtime_hint,
                 source_subdir=source_subdir,
                 user_id=user_id,
+                submission_channel=submission_channel,
             )
         )
         if isinstance(result, dict):

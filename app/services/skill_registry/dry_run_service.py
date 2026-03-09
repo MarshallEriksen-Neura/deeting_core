@@ -26,9 +26,7 @@ class SkillDryRunService:
         self.self_heal_service = self_heal_service
         self.self_heal_max_attempts = self_heal_max_attempts
 
-    async def run(
-        self, skill_id: str, *, allow_self_heal: bool = True
-    ) -> dict[str, Any]:
+    async def run(self, skill_id: str, *, allow_self_heal: bool = True) -> dict[str, Any]:
         skill = await self.repo.get_by_id(skill_id)
         if not skill:
             raise ValueError("Skill not found")
@@ -43,9 +41,7 @@ class SkillDryRunService:
                 intent="dry_run",
             )
         except Exception as exc:
-            return await self._handle_failure(
-                skill, "exec_failed", str(exc), allow_self_heal=allow_self_heal
-            )
+            return await self._handle_failure(skill, "exec_failed", str(exc), allow_self_heal=allow_self_heal)
 
         execution_error = _detect_execution_error(result)
         if execution_error:
@@ -56,18 +52,15 @@ class SkillDryRunService:
                 allow_self_heal=allow_self_heal,
             )
 
-        error_code = _validate_artifacts(
-            required_artifacts, result.get("artifacts", [])
-        )
+        error_code = _validate_artifacts(required_artifacts, result.get("artifacts", []))
         if error_code:
-            return await self._handle_failure(
-                skill, error_code, None, allow_self_heal=allow_self_heal
-            )
+            return await self._handle_failure(skill, error_code, None, allow_self_heal=allow_self_heal)
 
         await self.metrics_service.record_dry_run_success(skill_id)
-        await self.repo.update(skill, {"status": "active"})
+        success_status = _resolve_success_status(skill)
+        await self.repo.update(skill, {"status": success_status})
         return {
-            "status": "active",
+            "status": success_status,
             "stdout": result.get("stdout", []),
             "stderr": result.get("stderr", []),
             "artifacts": result.get("artifacts", []),
@@ -91,11 +84,7 @@ class SkillDryRunService:
             error_code=error_code,
             error_message=error_message,
         )
-        status = (
-            "needs_review"
-            if metrics.get("consecutive_failures", 0) >= self.failure_threshold
-            else "dry_run_fail"
-        )
+        status = "needs_review" if metrics.get("consecutive_failures", 0) >= self.failure_threshold else "dry_run_fail"
         await self.repo.update(skill, {"status": status})
         if can_self_heal:
             await self.self_heal_service.self_heal(skill.id)
@@ -114,9 +103,7 @@ def _normalize_artifact_specs(raw: Any) -> list[dict[str, Any]]:
     return [{"name": str(raw)}]
 
 
-def _validate_artifacts(
-    required: list[dict[str, Any]], actual: list[dict[str, Any]]
-) -> str | None:
+def _validate_artifacts(required: list[dict[str, Any]], actual: list[dict[str, Any]]) -> str | None:
     if not required:
         return None
     index: dict[str, dict[str, Any]] = {}
@@ -161,6 +148,16 @@ def _can_self_heal(manifest: dict[str, Any] | str | None, max_attempts: int) -> 
     if not isinstance(history, list):
         return True
     return len(history) < max_attempts
+
+
+def _resolve_success_status(skill) -> str:
+    manifest = skill.manifest_json if isinstance(skill.manifest_json, dict) else {}
+    ingestion = manifest.get("deeting_ingestion")
+    if not isinstance(ingestion, dict):
+        return "active"
+    if ingestion.get("requires_admin_approval"):
+        return "needs_review"
+    return "active"
 
 
 _PYTHON_TRACEBACK_RE = re.compile(r"^\s*Traceback \(most recent call last\):\s*$")

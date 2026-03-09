@@ -26,7 +26,7 @@ class SkillRegistryRepository(BaseRepository[SkillRegistry]):
         stmt = select(SkillRegistry).where(SkillRegistry.status == "active")
         result = await self.session.execute(stmt)
         skills = result.scalars().all()
-        
+
         for skill in skills:
             manifest = skill.manifest_json or {}
             tools = manifest.get("tools", [])
@@ -35,6 +35,35 @@ class SkillRegistryRepository(BaseRepository[SkillRegistry]):
                     if isinstance(tool, dict) and tool.get("name") == tool_name:
                         return skill
         return None
+
+    async def list_market_submissions(
+        self,
+        *,
+        status_filter: str | None = None,
+    ) -> list[SkillRegistry]:
+        stmt = select(SkillRegistry).order_by(
+            SkillRegistry.updated_at.desc(), SkillRegistry.id.desc()
+        )
+        if status_filter:
+            stmt = stmt.where(SkillRegistry.status == status_filter)
+
+        result = await self.session.execute(stmt)
+        skills = list(result.scalars().all())
+        return [skill for skill in skills if self.is_market_submission(skill)]
+
+    async def count_market_submissions(self, *, status_filter: str | None = None) -> int:
+        return len(await self.list_market_submissions(status_filter=status_filter))
+
+    @staticmethod
+    def is_market_submission(skill: SkillRegistry) -> bool:
+        manifest = skill.manifest_json or {}
+        ingestion = manifest.get("deeting_ingestion")
+        if not isinstance(ingestion, dict):
+            return False
+
+        if ingestion.get("submission_channel") == "plugin_market":
+            return True
+        return bool(ingestion.get("requires_admin_approval"))
 
 
 __all__ = ["SkillRegistryRepository"]

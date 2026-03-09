@@ -4,7 +4,6 @@ import logging
 import uuid
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.celery_app import celery_app
@@ -92,7 +91,15 @@ class PluginMarketService:
             raise HTTPException(status_code=400, detail="unsafe repo_url")
         task = celery_app.send_task(
             "skill_registry.ingest_repo",
-            args=[repo_url, revision, skill_id, runtime_hint, str(user_id)],
+            kwargs={
+                "repo_url": repo_url,
+                "revision": revision,
+                "skill_id": skill_id,
+                "runtime_hint": runtime_hint,
+                "source_subdir": None,
+                "user_id": str(user_id),
+                "submission_channel": "plugin_market",
+            },
         )
         return str(task.id)
 
@@ -106,9 +113,7 @@ class PluginMarketService:
     ) -> tuple[UserSkillInstallation, bool]:
         skill = await self.skill_repo.get_by_id(skill_id)
         if not skill:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="plugin not found"
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="plugin not found")
         if skill.type == "BUILTIN":
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,

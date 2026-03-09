@@ -263,6 +263,47 @@ class ToolSyncService:
         except Exception as exc:  # pragma: no cover - fail-open
             logger.warning("user tool index delete failed", exc_info=exc)
 
+    async def list_user_indexed_tool_names_by_origin(
+        self, *, user_id: uuid.UUID
+    ) -> dict[str, set[str]]:
+        if not qdrant_is_configured():
+            return {}
+        collection = get_kb_user_tool_collection_name(user_id)
+        client = get_qdrant_client()
+        indexed: dict[str, set[str]] = {}
+        offset = None
+        try:
+            while True:
+                points, offset = await scroll_points(
+                    client,
+                    collection_name=collection,
+                    limit=100,
+                    query_filter={
+                        "must": [
+                            {"key": "scope", "match": {"value": "user"}},
+                            {"key": "user_id", "match": {"value": str(user_id)}},
+                        ]
+                    },
+                    offset=offset,
+                )
+                if not points:
+                    break
+                for point in points:
+                    payload = point.get("payload") or {}
+                    origin = str(payload.get("origin") or "").strip()
+                    tool_name = str(payload.get("tool_name") or "").strip()
+                    if not origin or not tool_name:
+                        continue
+                    indexed.setdefault(origin, set()).add(tool_name)
+                if offset is None:
+                    break
+        except Exception as exc:  # pragma: no cover - fail-open
+            logger.warning(
+                "load user tool index failed user=%s", user_id, exc_info=exc
+            )
+            return {}
+        return indexed
+
     def _payloads_to_tools(
         self, payloads: list[dict], disabled: set[str] | None = None
     ) -> list[ToolDefinition]:

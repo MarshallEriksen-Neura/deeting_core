@@ -89,6 +89,15 @@ async def _fetch_mcp_source_payload(
     return data
 
 
+async def _load_indexed_tool_names_by_origin(user_id: uuid.UUID) -> dict[str, set[str]]:
+    try:
+        return await tool_sync_service.list_user_indexed_tool_names_by_origin(
+            user_id=user_id
+        )
+    except Exception:
+        return {}
+
+
 @router.get("/servers", response_model=list[UserMcpServerResponse])
 async def list_mcp_servers(
     current_user: User = Depends(get_current_active_user),
@@ -100,7 +109,14 @@ async def list_mcp_servers(
     stmt = select(UserMcpServer).where(UserMcpServer.user_id == current_user.id)
     result = await session.execute(stmt)
     servers = result.scalars().all()
-    return [UserMcpServerResponse.from_orm_model(s) for s in servers]
+    indexed_by_origin = await _load_indexed_tool_names_by_origin(current_user.id)
+    return [
+        UserMcpServerResponse.from_orm_model(
+            s,
+            indexed_tool_names=indexed_by_origin.get(str(s.id)),
+        )
+        for s in servers
+    ]
 
 
 @router.post("/servers", response_model=UserMcpServerResponse)
@@ -488,17 +504,18 @@ async def list_mcp_server_tools(
         raise HTTPException(status_code=404, detail="MCP server not found")
 
     disabled = set(server.disabled_tools or [])
+    indexed_by_origin = await _load_indexed_tool_names_by_origin(current_user.id)
+    indexed_tool_names = indexed_by_origin.get(str(server.id))
     tools = []
     for tool in server.tools_cache or []:
         name = tool.get("name")
         if not name:
             continue
         tools.append(
-            McpServerToolItem(
-                name=name,
-                description=tool.get("description"),
-                input_schema=tool.get("input_schema") or {},
-                enabled=name not in disabled,
+            McpServerToolItem.from_cached_tool(
+                server_model=server,
+                tool_payload=tool,
+                indexed_tool_names=indexed_tool_names,
             )
         )
     return tools
@@ -561,11 +578,11 @@ async def toggle_mcp_server_tool(
     except Exception:
         pass
 
-    return McpServerToolItem(
-        name=tool_name,
-        description=tool.get("description"),
-        input_schema=tool.get("input_schema") or {},
-        enabled=tool_name not in disabled_tools,
+    indexed_by_origin = await _load_indexed_tool_names_by_origin(current_user.id)
+    return McpServerToolItem.from_cached_tool(
+        server_model=server,
+        tool_payload=tool,
+        indexed_tool_names=indexed_by_origin.get(str(server.id)),
     )
 
 

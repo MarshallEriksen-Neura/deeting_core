@@ -15,10 +15,16 @@ from app.models.gateway_log import GatewayLog
 from app.repositories.gateway_log_repository import GatewayLogRepository
 from app.repositories.provider_instance_repository import ProviderInstanceRepository
 from app.repositories.quota_repository import QuotaRepository
+from app.repositories.review_repository import ReviewTaskRepository
+from app.repositories.skill_registry_repository import SkillRegistryRepository
+from app.repositories.spec_knowledge_repository import (
+    SpecKnowledgeCandidateRepository,
+)
 from app.schemas.dashboard import (
     DashboardStatsResponse,
     FinancialStats,
     HealthStats,
+    PendingReviewCountsResponse,
     ProviderHealthItem,
     RecentErrorItem,
     SmartRouterStatsResponse,
@@ -27,6 +33,7 @@ from app.schemas.dashboard import (
     TokenTimelinePoint,
     TrafficStats,
 )
+from app.services.assistant.constants import ASSISTANT_MARKET_ENTITY
 from app.services.providers.health_monitor import HealthMonitorService
 from app.utils.time_utils import Datetime
 
@@ -39,6 +46,9 @@ class DashboardService:
         self.log_repo = GatewayLogRepository(session)
         self.quota_repo = QuotaRepository(session)
         self.provider_repo = ProviderInstanceRepository(session)
+        self.review_repo = ReviewTaskRepository(session)
+        self.spec_repo = SpecKnowledgeCandidateRepository(session)
+        self.skill_repo = SkillRegistryRepository(session)
         self.health_svc = (
             HealthMonitorService(cache.redis)
             if getattr(cache, "_redis", None)
@@ -113,6 +123,25 @@ class DashboardService:
 
         await cache.set(cache_key, resp, ttl=30)
         return resp
+
+    async def get_pending_review_counts(self) -> PendingReviewCountsResponse:
+        assistant_reviews, knowledge_reviews, plugin_reviews = await self._gather_pending_review_counts()
+        return PendingReviewCountsResponse(
+            assistant_reviews=assistant_reviews,
+            knowledge_reviews=knowledge_reviews,
+            plugin_reviews=plugin_reviews,
+        )
+
+    async def _gather_pending_review_counts(self) -> tuple[int, int, int]:
+        assistant_reviews = await self.review_repo.count_by_status(
+            ASSISTANT_MARKET_ENTITY,
+            "pending",
+        )
+        knowledge_reviews = await self.spec_repo.count_by_status("pending_review")
+        plugin_reviews = await self.skill_repo.count_market_submissions(
+            status_filter="needs_review"
+        )
+        return assistant_reviews, knowledge_reviews, plugin_reviews
 
     async def _sum_cost(self, start, end, tenant_id: str | None) -> float:
         stmt = select(func.sum(GatewayLog.cost_user)).where(

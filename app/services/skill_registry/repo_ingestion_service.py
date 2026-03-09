@@ -22,6 +22,9 @@ from app.services.plugin_ui_bundle_storage import (
 from app.services.skill_registry.manifest_generator import SkillManifestGenerator
 from app.services.skill_registry.parsers.base import RepoContext, RepoParserPlugin
 from app.services.skill_registry.repo_ingestion_utils import build_file_index
+from app.services.skill_registry.repo_security_review_service import (
+    RepoSecurityReviewService,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +38,7 @@ class RepoIngestionService:
         capability_repo: SkillCapabilityRepository | None = None,
         dependency_repo: SkillDependencyRepository | None = None,
         artifact_repo: SkillArtifactRepository | None = None,
+        security_review_service: RepoSecurityReviewService | None = None,
     ):
         self.repo = repo
         self.manifest_generator = manifest_generator
@@ -42,6 +46,7 @@ class RepoIngestionService:
         self.capability_repo = capability_repo
         self.dependency_repo = dependency_repo
         self.artifact_repo = artifact_repo
+        self.security_review_service = security_review_service or RepoSecurityReviewService()
 
     def select_parser(self, repo_context: RepoContext) -> RepoParserPlugin:
         for parser in self.parsers:
@@ -66,6 +71,7 @@ class RepoIngestionService:
         runtime_hint: str | None = None,
         source_subdir: str | None = None,
         user_id: str | None = None,
+        submission_channel: str | None = None,
     ) -> dict:
         if self.repo is None or self.manifest_generator is None:
             raise ValueError("repo and manifest_generator are required for ingestion")
@@ -78,9 +84,7 @@ class RepoIngestionService:
             if source_subdir:
                 effective_root = repo_root / source_subdir.strip("/")
                 if not effective_root.exists():
-                    raise ValueError(
-                        f"Source subdir '{source_subdir}' not found in repo"
-                    )
+                    raise ValueError(f"Source subdir '{source_subdir}' not found in repo")
 
             file_index = build_file_index(effective_root)
             repo_context = RepoContext(
@@ -129,6 +133,18 @@ class RepoIngestionService:
                 revision=revision,
             )
             manifest = _enrich_manifest_with_ui_bundle(manifest, ui_bundle_meta)
+            security_review = await self.security_review_service.review_repo(
+                repo_context,
+                evidence,
+                manifest,
+                user_id=user_id,
+            )
+            manifest = _enrich_manifest_with_review_metadata(
+                manifest,
+                security_review=security_review,
+                submission_channel=submission_channel,
+                user_id=user_id,
+            )
             payload = _build_skill_payload(
                 resolved_skill_id,
                 manifest,
@@ -152,7 +168,12 @@ class RepoIngestionService:
                 self.artifact_repo,
             )
             _trigger_qdrant_sync(resolved_skill_id)
-            return {"skill_id": resolved_skill_id, "status": status}
+            return {
+                "skill_id": resolved_skill_id,
+                "status": status,
+                "review_required": bool(manifest.get("deeting_ingestion", {}).get("requires_admin_approval")),
+                "security_review_decision": security_review.get("decision"),
+            }
         finally:
             if temp_root:
                 shutil.rmtree(temp_root, ignore_errors=True)
@@ -177,7 +198,7 @@ def clone_repo(repo_url: str, revision: str, workdir: Path) -> tuple[Path, Path]
         repo_url,
         str(repo_root),
     ]
-    subprocess.run(cmd, check=True, capture_output=True, text=True)
+    subprocess.run(cmd, check=True, capture_output=True, text=True)  # noqa: S603
     return repo_root, temp_root
 
 
@@ -193,6 +214,17 @@ def _build_skill_payload(
     if not isinstance(env_requirements, dict):
         env_requirements = {}
     complexity_score = _extract_complexity_score(manifest)
+    ingestion_meta = manifest.get("deeting_ingestion")
+    if not isinstance(ingestion_meta, dict):
+        ingestion_meta = {}
+    security_review = ingestion_meta.get("security_review")
+    if not isinstance(security_review, dict):
+        security_review = {}
+    status_value = (
+        "needs_review"
+        if ingestion_meta.get("requires_admin_approval")
+        else "draft"
+    )
     return {
         "id": skill_id,
         "name": manifest.get("name") or skill_id,
@@ -202,10 +234,11 @@ def _build_skill_payload(
         "source_repo": repo_url,
         "source_subdir": source_subdir,
         "source_revision": revision,
-        "risk_level": manifest.get("risk_level"),
+        "risk_level": security_review.get("risk_level") or manifest.get("risk_level"),
         "complexity_score": complexity_score,
         "manifest_json": manifest,
         "env_requirements": env_requirements,
+        "status": status_value,
     }
 
 
@@ -302,6 +335,25 @@ def _enrich_manifest_with_ui_bundle(manifest: dict, ui_bundle_meta: dict | None)
         "renderer_asset_path": str(ui_bundle_meta.get("renderer_asset_path") or ""),
         "bundle_ready": bool(ui_bundle_meta.get("bundle_ready")),
     }
+    return payload
+
+
+def _enrich_manifest_with_review_metadata(
+    manifest: dict,
+    *,
+    security_review: dict,
+    submission_channel: str | None,
+    user_id: str | None,
+) -> dict:
+    payload = dict(manifest or {})
+    ingestion_meta = (
+        dict(payload.get("deeting_ingestion")) if isinstance(payload.get("deeting_ingestion"), dict) else {}
+    )
+    ingestion_meta["submission_channel"] = submission_channel or "direct"
+    ingestion_meta["requires_admin_approval"] = submission_channel == "plugin_market"
+    ingestion_meta["submitter_user_id"] = user_id
+    ingestion_meta["security_review"] = security_review
+    payload["deeting_ingestion"] = ingestion_meta
     return payload
 
 

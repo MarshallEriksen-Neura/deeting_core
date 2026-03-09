@@ -29,6 +29,10 @@ from app.models import (
     TransactionType,
     User,
 )
+from app.models.review import ReviewStatus, ReviewTask
+from app.models.skill_registry import SkillRegistry
+from app.models.spec_knowledge import SpecKnowledgeCandidate
+from app.services.assistant.constants import ASSISTANT_MARKET_ENTITY
 from app.utils.time_utils import Datetime
 
 
@@ -567,3 +571,62 @@ async def test_admin_notification_endpoints(
     )
     assert resp.status_code == 200
     assert all(item["type"] == "security" for item in resp.json()["items"])
+
+
+@pytest.mark.asyncio
+async def test_admin_pending_review_counts(
+    client: AsyncClient,
+    admin_tokens: dict,
+    AsyncSessionLocal,
+):
+    user_id = await _get_user_id(AsyncSessionLocal, "testuser@example.com")
+    assistant_entity_id = uuid.uuid4()
+    knowledge_candidate_id = uuid.uuid4()
+
+    async with AsyncSessionLocal() as session:
+        session.add(
+            ReviewTask(
+                entity_type=ASSISTANT_MARKET_ENTITY,
+                entity_id=assistant_entity_id,
+                status=ReviewStatus.PENDING,
+                submitter_user_id=user_id,
+                submitted_at=Datetime.now(),
+            )
+        )
+        session.add(
+            SpecKnowledgeCandidate(
+                id=knowledge_candidate_id,
+                canonical_hash=f"candidate-{knowledge_candidate_id.hex}",
+                user_id=user_id,
+                status="pending_review",
+                manifest_data={"title": "Spec candidate"},
+                normalized_manifest={"title": "Spec candidate"},
+            )
+        )
+        session.add(
+            SkillRegistry(
+                id="plugin.review.pending",
+                name="Pending Plugin",
+                version="1.0.0",
+                runtime="python",
+                status="needs_review",
+                manifest_json={
+                    "deeting_ingestion": {
+                        "requires_admin_approval": True,
+                        "submission_channel": "plugin_market",
+                    }
+                },
+                env_requirements={},
+            )
+        )
+        await session.commit()
+
+    headers = {"Authorization": f"Bearer {admin_tokens['access_token']}"}
+    resp = await client.get("/api/v1/admin/pending-reviews", headers=headers)
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "assistant_reviews": 1,
+        "knowledge_reviews": 1,
+        "plugin_reviews": 1,
+    }

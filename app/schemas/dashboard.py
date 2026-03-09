@@ -74,3 +74,9 @@ class RecentErrorItem(BaseSchema):
     model: str
     error_message: str = Field(..., alias="errorMessage")
     error_code: str | None = Field(None, alias="errorCode")
+
+
+class PendingReviewCountsResponse(BaseSchema):
+    assistant_reviews: int = 0
+    knowledge_reviews: int = 0
+    plugin_reviews: int = 0
