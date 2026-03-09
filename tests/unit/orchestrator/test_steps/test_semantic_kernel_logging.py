@@ -126,3 +126,64 @@ async def test_semantic_kernel_does_not_override_locked_assistant(monkeypatch):
     assert result.status.value == "success"
     assert ctx.get("assistant", "id") == "locked-assistant"
     assert ctx.get("assistant", "name") == "locked-name"
+
+
+@pytest.mark.asyncio
+async def test_semantic_kernel_search_prioritizes_boot_and_core_memories(monkeypatch):
+    step = SemanticKernelStep()
+
+    class FakeVectorStore:
+        async def list_points(self, limit: int, cursor: str | None):
+            return (
+                [
+                    {
+                        "id": "mem-boot",
+                        "content": "Always answer in Chinese.",
+                        "payload": {"is_boot": True, "memory_tier": "core"},
+                    },
+                    {
+                        "id": "mem-core",
+                        "content": "User prefers concise answers.",
+                        "payload": {
+                            "is_core": True,
+                            "recall_when": "response style concise",
+                        },
+                    },
+                    {
+                        "id": "mem-ignore",
+                        "content": "Favorite movie is Interstellar.",
+                        "payload": {"is_core": True, "recall_when": "movies only"},
+                    },
+                ],
+                None,
+            )
+
+        async def search(self, query: str, limit: int, score_threshold: float):
+            return [
+                {
+                    "id": "mem-core",
+                    "content": "User prefers concise answers.",
+                    "payload": {"is_core": True},
+                    "score": 0.95,
+                },
+                {
+                    "id": "mem-semantic",
+                    "content": "Project deadline is Friday.",
+                    "payload": {},
+                    "score": 0.91,
+                },
+            ]
+
+    monkeypatch.setattr(
+        "app.services.workflow.steps.semantic_kernel.get_qdrant_client",
+        lambda: object(),
+    )
+    monkeypatch.setattr(
+        "app.services.workflow.steps.semantic_kernel.QdrantUserVectorService",
+        lambda **kwargs: FakeVectorStore(),
+    )
+
+    results = await step._search_memories("user-1", "Need a concise response style for this reply")
+
+    assert results is not None
+    assert [item["id"] for item in results] == ["mem-boot", "mem-core", "mem-semantic"]

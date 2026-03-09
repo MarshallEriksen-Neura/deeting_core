@@ -18,6 +18,10 @@ class MemoryItem(BaseSchema):
     content: str = Field(..., description="记忆内容")
     payload: dict[str, Any] = Field(default_factory=dict, description="元数据")
     score: float | None = Field(None, description="搜索得分 (列表时为 None)")
+    recall_when: str | None = Field(None, description="触发召回提示")
+    memory_tier: str | None = Field(None, description="记忆分层")
+    is_core: bool | None = Field(None, description="是否为核心记忆")
+    is_boot: bool | None = Field(None, description="是否为启动记忆")
 
 
 class MemoryListResponse(BaseSchema):
@@ -35,6 +39,10 @@ class MemoryUpdateRequest(BaseSchema):
     """
 
     content: str = Field(..., description="更新后的记忆内容")
+    recall_when: str | None = Field(None, description="触发召回提示")
+    memory_tier: str | None = Field(None, description="记忆分层")
+    is_core: bool | None = Field(None, description="是否为核心记忆")
+    is_boot: bool | None = Field(None, description="是否为启动记忆")
 
 
 class MemorySnapshotItem(BaseSchema):
