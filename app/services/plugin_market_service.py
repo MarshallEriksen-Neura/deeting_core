@@ -4,16 +4,18 @@ import logging
 import uuid
 
 from fastapi import HTTPException, status
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.celery_app import celery_app
+from app.models import User
 from app.models.skill_registry import SkillRegistry
 from app.models.user_skill_installation import UserSkillInstallation
 from app.repositories.skill_registry_repository import SkillRegistryRepository
 from app.repositories.user_skill_installation_repository import (
     UserSkillInstallationRepository,
 )
+from app.services.system_assets import SystemAssetRegistryService
 from app.utils.security import is_safe_upstream_url
 
 logger = logging.getLogger(__name__)
@@ -26,28 +28,53 @@ class PluginMarketService:
         self.install_repo = UserSkillInstallationRepository(session)
 
     async def list_market_skills(
-        self, *, user_id: uuid.UUID, q: str | None = None, limit: int = 50
+        self, *, user: User, q: str | None = None, limit: int = 50
     ) -> list[tuple[SkillRegistry, bool]]:
-        stmt = select(SkillRegistry).where(
-            SkillRegistry.status == "active",
+        registry_service = SystemAssetRegistryService(self.session)
+        await registry_service.sync_projection_sources()
+        role_names = await registry_service._fetch_user_role_names(user_id=user.id)
+        assets = await registry_service.repo.list_system_assets(
+            asset_kind="capability",
+            status="active",
+            limit=max(200, limit * 5),
         )
         keyword = (q or "").strip()
-        if keyword:
-            like = f"%{keyword}%"
-            stmt = stmt.where(
-                or_(
-                    SkillRegistry.id.ilike(like),
-                    SkillRegistry.name.ilike(like),
-                    SkillRegistry.description.ilike(like),
-                )
+        filtered_assets = []
+        for asset in assets:
+            metadata = asset.metadata_json if isinstance(asset.metadata_json, dict) else {}
+            if metadata.get("registry_entity") != "skill":
+                continue
+            policy = registry_service._build_policy_snapshot(
+                asset=asset,
+                user=user,
+                role_names=role_names,
             )
-        stmt = stmt.order_by(SkillRegistry.updated_at.desc(), SkillRegistry.id.asc())
-        stmt = stmt.limit(max(1, min(limit, 100)))
-        result = await self.session.execute(stmt)
-        skills = list(result.scalars().all())
+            if policy.materialization_state == "hidden":
+                continue
+            if keyword:
+                haystack = " ".join(
+                    [
+                        asset.asset_id,
+                        asset.title or "",
+                        asset.description or "",
+                        str(metadata.get("skill_id") or ""),
+                    ]
+                ).lower()
+                if keyword.lower() not in haystack:
+                    continue
+            filtered_assets.append(asset)
 
-        installed_ids = await self.install_repo.list_enabled_skill_ids(user_id)
-        return [(skill, skill.id in installed_ids) for skill in skills]
+        filtered_assets.sort(key=lambda item: ((item.title or "").lower(), item.asset_id))
+        filtered_assets = filtered_assets[: max(1, min(limit, 100))]
+
+        installed_ids = await self.install_repo.list_enabled_skill_ids(user.id)
+        return [
+            (
+                asset,
+                str((asset.metadata_json or {}).get("skill_id") or "") in installed_ids,
+            )
+            for asset in filtered_assets
+        ]
 
     async def list_installations(self, *, user_id: uuid.UUID) -> list[UserSkillInstallation]:
         return await self.install_repo.list_by_user(user_id, enabled_only=False)

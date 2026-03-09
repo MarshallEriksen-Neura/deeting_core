@@ -61,6 +61,7 @@ from app.api.v1.plugin_market_route import router as plugin_market_router
 from app.api.v1.providers_route import router as provider_router
 from app.api.v1.public import image_generation_share_router as public_image_share_router
 from app.api.v1.spec_agent_route import router as spec_agent_router
+from app.api.v1.system_assets_route import router as system_assets_router
 from app.api.v1.user_api_keys_route import (
     models_router as available_models_router,
 )
@@ -127,6 +128,7 @@ __all__ = [
     "public_image_share_router",
     "settings_router",
     "spec_agent_router",
+    "system_assets_router",
     "user_api_keys_router",
     "user_documents_router",
     "user_mcp_router",

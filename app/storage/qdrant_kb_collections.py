@@ -6,8 +6,11 @@ from uuid import UUID
 from app.core.config import settings
 
 # 兼容历史常量
-QDRANT_SYS_TOOL_INDEX_COLLECTION = "sys_tool_index"
-SKILL_COLLECTION_NAME = "skill_registry"
+QDRANT_SYS_TOOL_INDEX_COLLECTION = "system_capability_tools"
+SKILL_COLLECTION_NAME = "system_capability_skills"
+ASSISTANT_COLLECTION_NAME = "system_capability_assistants"
+PLUGIN_MARKETPLACE_COLLECTION_NAME = "system_capability_marketplace"
+SEMANTIC_CACHE_COLLECTION_NAME = "infra_semantic_cache"
 
 
 def _normalize_user_id_hex(user_id: UUID | str) -> str:
@@ -29,29 +32,31 @@ def _stable_short_hash(value: str) -> str:
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
 
 
-def get_kb_system_collection_name() -> str:
+def get_system_memory_collection_name() -> str:
     return str(
-        getattr(settings, "QDRANT_KB_SYSTEM_COLLECTION", "kb_system") or "kb_system"
+        getattr(settings, "QDRANT_KB_SYSTEM_COLLECTION", "system_memory")
+        or "system_memory"
     ).strip()
 
 
-def get_kb_candidates_collection_name() -> str:
+def get_infra_candidates_collection_name() -> str:
     return str(
-        getattr(settings, "QDRANT_KB_CANDIDATES_COLLECTION", "kb_candidates")
-        or "kb_candidates"
+        getattr(settings, "QDRANT_KB_CANDIDATES_COLLECTION", "infra_candidates")
+        or "infra_candidates"
     ).strip()
 
 
-def get_kb_user_collection_name(
+def get_user_memory_collection_name(
     user_id: UUID | str,
     *,
     embedding_model: str | None = None,
 ) -> str:
     prefix = str(
-        getattr(settings, "QDRANT_KB_USER_COLLECTION", "kb_user") or "kb_user"
+        getattr(settings, "QDRANT_KB_USER_COLLECTION", "user_memory")
+        or "user_memory"
     ).strip()
     if not prefix:
-        prefix = "kb_user"
+        prefix = "user_memory"
 
     strategy = (
         str(
@@ -86,33 +91,101 @@ def get_kb_user_collection_name(
     return f"{prefix}_{_normalize_user_id_hex(user_id)}"
 
 
-def get_tool_system_collection_name() -> str:
+def get_system_capability_tool_collection_name() -> str:
     default_name = QDRANT_SYS_TOOL_INDEX_COLLECTION
     return str(
         getattr(settings, "QDRANT_TOOL_SYSTEM_COLLECTION", default_name) or default_name
     ).strip()
 
 
-def get_kb_user_tool_collection_name(user_id: UUID | str) -> str:
+def get_user_capability_tool_collection_name(user_id: UUID | str) -> str:
     prefix = str(
-        getattr(settings, "QDRANT_TOOL_USER_COLLECTION_PREFIX", "kb_user") or "kb_user"
+        getattr(settings, "QDRANT_TOOL_USER_COLLECTION_PREFIX", "user_capability")
+        or "user_capability"
     ).strip()
     if not prefix:
-        prefix = "kb_user"
+        prefix = "user_capability"
     return f"{prefix}_{_normalize_user_id_hex(user_id)}_tools"
 
 
 def get_skill_collection_name() -> str:
-    return SKILL_COLLECTION_NAME
+    return str(
+        getattr(settings, "QDRANT_SKILL_COLLECTION", SKILL_COLLECTION_NAME)
+        or SKILL_COLLECTION_NAME
+    ).strip()
+
+
+def get_assistant_collection_name() -> str:
+    return str(
+        getattr(settings, "QDRANT_ASSISTANT_COLLECTION", ASSISTANT_COLLECTION_NAME)
+        or ASSISTANT_COLLECTION_NAME
+    ).strip()
+
+
+def get_marketplace_collection_name() -> str:
+    return str(
+        getattr(
+            settings,
+            "QDRANT_MARKETPLACE_COLLECTION",
+            PLUGIN_MARKETPLACE_COLLECTION_NAME,
+        )
+        or PLUGIN_MARKETPLACE_COLLECTION_NAME
+    ).strip()
+
+
+def get_semantic_cache_collection_name() -> str:
+    return str(
+        getattr(
+            settings,
+            "QDRANT_SEMANTIC_CACHE_COLLECTION",
+            SEMANTIC_CACHE_COLLECTION_NAME,
+        )
+        or SEMANTIC_CACHE_COLLECTION_NAME
+    ).strip()
+
+
+def get_kb_system_collection_name() -> str:
+    return get_system_memory_collection_name()
+
+
+def get_kb_candidates_collection_name() -> str:
+    return get_infra_candidates_collection_name()
+
+
+def get_kb_user_collection_name(
+    user_id: UUID | str,
+    *,
+    embedding_model: str | None = None,
+) -> str:
+    return get_user_memory_collection_name(user_id, embedding_model=embedding_model)
+
+
+def get_tool_system_collection_name() -> str:
+    return get_system_capability_tool_collection_name()
+
+
+def get_kb_user_tool_collection_name(user_id: UUID | str) -> str:
+    return get_user_capability_tool_collection_name(user_id)
 
 
 __all__ = [
     "QDRANT_SYS_TOOL_INDEX_COLLECTION",
+    "ASSISTANT_COLLECTION_NAME",
+    "PLUGIN_MARKETPLACE_COLLECTION_NAME",
+    "SEMANTIC_CACHE_COLLECTION_NAME",
     "SKILL_COLLECTION_NAME",
+    "get_assistant_collection_name",
     "get_kb_candidates_collection_name",
     "get_kb_system_collection_name",
     "get_kb_user_collection_name",
     "get_kb_user_tool_collection_name",
+    "get_infra_candidates_collection_name",
+    "get_marketplace_collection_name",
+    "get_semantic_cache_collection_name",
     "get_skill_collection_name",
+    "get_system_capability_tool_collection_name",
+    "get_system_memory_collection_name",
     "get_tool_system_collection_name",
+    "get_user_capability_tool_collection_name",
+    "get_user_memory_collection_name",
 ]

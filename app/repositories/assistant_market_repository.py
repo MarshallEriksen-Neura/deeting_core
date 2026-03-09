@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import and_, case, func, or_, select
+from sqlalchemy import and_, case, false, func, or_, select
 
 from app.models.assistant import Assistant, AssistantStatus, AssistantVersion
 from app.models.assistant_install import AssistantInstall
@@ -21,6 +21,7 @@ class AssistantMarketRepository:
         entity_type: str,
         query: str | None = None,
         tags: list[str] | None = None,
+        visible_system_assistant_ids: list[UUID] | None = None,
     ):
         """
         市场助手列表查询（public + published + 审核通过或系统助手）。
@@ -30,6 +31,26 @@ class AssistantMarketRepository:
         av = AssistantVersion
         ai = AssistantInstall
         rt = ReviewTask
+
+        if visible_system_assistant_ids is None:
+            market_visibility = or_(
+                Assistant.owner_user_id.is_(None),
+                rt.status == ReviewStatus.APPROVED.value,
+            )
+        else:
+            system_condition = false()
+            if visible_system_assistant_ids:
+                system_condition = and_(
+                    Assistant.owner_user_id.is_(None),
+                    Assistant.id.in_(visible_system_assistant_ids),
+                )
+            market_visibility = or_(
+                system_condition,
+                and_(
+                    Assistant.owner_user_id.is_not(None),
+                    rt.status == ReviewStatus.APPROVED.value,
+                ),
+            )
 
         stmt = (
             select(
@@ -55,10 +76,7 @@ class AssistantMarketRepository:
             .where(
                 Assistant.visibility == "public",
                 Assistant.status == "published",
-                or_(
-                    Assistant.owner_user_id.is_(None),
-                    rt.status == ReviewStatus.APPROVED.value,
-                ),
+                market_visibility,
             )
         )
 
@@ -79,6 +97,7 @@ class AssistantMarketRepository:
         user_id: UUID | None,
         entity_type: str,
         tags: list[str] | None = None,
+        visible_system_assistant_ids: list[UUID] | None = None,
     ) -> list[tuple[Assistant, AssistantVersion, UUID | None]]:
         if not assistant_ids:
             return []
@@ -99,6 +118,7 @@ class AssistantMarketRepository:
             entity_type=entity_type,
             query=None,
             tags=tags,
+            visible_system_assistant_ids=visible_system_assistant_ids,
         )
         stmt = stmt.where(Assistant.id.in_(uuid_ids))
         result = await self.session.execute(stmt)

@@ -25,6 +25,7 @@ from . import monitor  # noqa: F401
 from . import notification  # noqa: F401
 from . import periodic  # noqa: F401
 from . import quota_sync  # noqa: F401
+from . import qdrant_collections  # noqa: F401
 from . import reports  # noqa: F401
 from . import search_index  # noqa: F401
 from . import skill_registry  # noqa: F401

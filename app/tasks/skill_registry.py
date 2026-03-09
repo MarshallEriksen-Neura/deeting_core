@@ -16,12 +16,13 @@ from app.services.skill_registry.dry_run_service import SkillDryRunService
 from app.services.skill_registry.skill_metrics_service import SkillMetricsService
 from app.services.skill_registry.skill_runtime_executor import SkillRuntimeExecutor
 from app.services.skill_registry.skill_self_heal_service import SkillSelfHealService
+from app.storage.qdrant_kb_collections import get_skill_collection_name
 from app.storage.qdrant_kb_store import ensure_collection_vector_size, upsert_points
 from app.tasks.async_runner import run_async
 
 logger = logging.getLogger(__name__)
 
-SKILL_COLLECTION_NAME = "skill_registry"
+SKILL_COLLECTION_NAME = get_skill_collection_name()
 
 
 def _build_embedding_text(skill) -> str:

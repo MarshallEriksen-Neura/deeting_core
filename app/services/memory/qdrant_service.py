@@ -8,9 +8,11 @@ from app.models.agent_plugin import AgentPlugin
 from app.qdrant_client import get_qdrant_client, qdrant_is_configured
 from app.services.providers.embedding import EmbeddingService
 from app.storage.qdrant_kb_collections import (
-    get_kb_candidates_collection_name,
-    get_kb_system_collection_name,
-    get_tool_system_collection_name,
+    get_infra_candidates_collection_name,
+    get_marketplace_collection_name,
+    get_semantic_cache_collection_name,
+    get_system_memory_collection_name,
+    get_system_capability_tool_collection_name,
 )
 from app.storage.qdrant_kb_store import (
     ensure_collection_vector_size,
@@ -19,11 +21,11 @@ from app.storage.qdrant_kb_store import (
 )
 
 # Constants for Collection Names
-COLLECTION_PLUGIN_MARKETPLACE = "plugin_marketplace"
-COLLECTION_SEMANTIC_CACHE = "semantic_cache"
-COLLECTION_KB_SYSTEM = get_kb_system_collection_name()
-COLLECTION_KB_CANDIDATES = get_kb_candidates_collection_name()
-COLLECTION_SYS_TOOL_INDEX = get_tool_system_collection_name()
+COLLECTION_PLUGIN_MARKETPLACE = get_marketplace_collection_name()
+COLLECTION_SEMANTIC_CACHE = get_semantic_cache_collection_name()
+COLLECTION_KB_SYSTEM = get_system_memory_collection_name()
+COLLECTION_KB_CANDIDATES = get_infra_candidates_collection_name()
+COLLECTION_SYS_TOOL_INDEX = get_system_capability_tool_collection_name()
 
 # Constants for System Scopes
 SCOPE_SYSTEM_PUBLIC = "SYSTEM_PUBLIC"
@@ -83,13 +85,13 @@ class SystemQdrantService:
         # 2. Semantic Cache
         await self._ensure_collection(COLLECTION_SEMANTIC_CACHE, vector_size=vector_size)
 
-        # 3. System KB（平台维护，用户不可写）
+        # 3. System Memory（平台维护，用户不可写）
         await self._ensure_collection(COLLECTION_KB_SYSTEM, vector_size=vector_size)
 
-        # 4. Candidate KB（候选知识暂存）
+        # 4. Infra Candidates（候选知识暂存）
         await self._ensure_collection(COLLECTION_KB_CANDIDATES, vector_size=vector_size)
 
-        # 5. System Tool Index (Shared, ReadOnly for users)
+        # 5. System Capability Tools (Shared, ReadOnly for users)
         await self._ensure_collection(COLLECTION_SYS_TOOL_INDEX, vector_size=vector_size)
 
     async def _ensure_collection(self, name: str, vector_size: int) -> None:
