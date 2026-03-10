@@ -4,6 +4,7 @@ from typing import Any
 
 import pytest
 from sqlalchemy import select
+
 from app.models.skill_registry import SkillRegistry
 
 
@@ -11,6 +12,8 @@ def _build_manifest(summary: str = "Needs admin approval") -> dict[str, Any]:
     return {
         "name": "HTTP Fetch",
         "summary": summary,
+        "permissions": ["network.outbound", "files.read"],
+        "execution": {"timeout_seconds": 60},
         "deeting_ingestion": {
             "requires_admin_approval": True,
             "submission_channel": "plugin_market",
@@ -81,7 +84,9 @@ async def test_list_plugin_market_reviews(client, admin_tokens: dict, AsyncSessi
     item = next(row for row in payload["items"] if row["id"] == "market.review.list")
     assert item["submitter_user_id"] == "00000000-0000-0000-0000-000000000010"
     assert item["security_review_summary"] == "Needs admin approval"
+    assert item["security_review_decision"] == "needs_review"
     assert item["findings"][0]["category"] == "network"
+    assert item["manifest_json"]["permissions"] == ["network.outbound", "files.read"]
 
 
 @pytest.mark.asyncio

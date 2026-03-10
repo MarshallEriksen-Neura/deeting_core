@@ -213,7 +213,9 @@ class ImageGenerationShareService:
         if not task_ids:
             return {}
 
+        image_service = ImageGenerationService(self.session)
         outputs = await self.output_repo.list_by_task_ids(task_ids)
+        outputs = await image_service.ensure_outputs_have_assets(outputs)
         first_outputs = {}
         for output in outputs:
             if output.task_id not in first_outputs:

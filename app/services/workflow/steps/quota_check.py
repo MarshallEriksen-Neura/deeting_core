@@ -86,7 +86,8 @@ class QuotaCheckStep(BaseStep):
             return StepResult(status=StepStatus.SUCCESS)
 
         try:
-            await self._check_api_key_quota(ctx, api_key_id)
+            if ctx.is_external:
+                await self._check_api_key_quota(ctx, api_key_id)
 
             quota_info = {}
             if tenant_id:

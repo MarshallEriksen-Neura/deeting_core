@@ -136,6 +136,7 @@ class PluginMarketReviewAdminService:
             destructive_actions=self._string_list(security_review.get("destructive_actions")),
             privacy_risks=self._string_list(security_review.get("privacy_risks")),
             findings=findings,
+            manifest_json=manifest,
             created_at=skill.created_at,
             updated_at=skill.updated_at,
         )

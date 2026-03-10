@@ -231,3 +231,8 @@ def get_external_orchestrator() -> GatewayOrchestrator:
 def get_internal_orchestrator() -> GatewayOrchestrator:
     """FastAPI 依赖：获取内部通道编排器"""
     return GatewayOrchestrator.for_channel(Channel.INTERNAL)
+
+
+def get_internal_embedding_orchestrator() -> GatewayOrchestrator:
+    """FastAPI 依赖：获取内部 Embeddings 编排器"""
+    return GatewayOrchestrator.for_channel(Channel.INTERNAL, capability="embedding")

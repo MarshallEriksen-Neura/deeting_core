@@ -44,6 +44,16 @@ def test_external_image_workflow_contract_steps():
     assert cfg.steps.index("provider_execution") < cfg.steps.index("response_transform")
 
 
+def test_external_embedding_workflow_contract_steps():
+    cfg = get_workflow_for_channel(Channel.EXTERNAL, "embedding")
+
+    assert cfg.template == WorkflowTemplate.EXTERNAL_EMBEDDINGS
+    assert "provider_execution" in cfg.steps
+    assert "agent_executor" not in cfg.steps
+    assert "quota_check" in cfg.steps
+    assert "billing" in cfg.steps
+
+
 def test_internal_chat_workflow_contract_steps():
     cfg = get_workflow_for_channel(Channel.INTERNAL, "chat")
 
@@ -55,13 +65,16 @@ def test_internal_chat_workflow_contract_steps():
     assert cfg.steps.index("conversation_append") < cfg.steps.index("billing")
 
 
-def test_internal_non_chat_routes_to_preview_workflow():
+def test_internal_embedding_routes_to_embedding_workflow():
     cfg = get_workflow_for_channel(Channel.INTERNAL, "embedding")
 
-    assert cfg.template == WorkflowTemplate.INTERNAL_PREVIEW
+    assert cfg.template == WorkflowTemplate.INTERNAL_EMBEDDINGS
     assert "conversation_load" not in cfg.steps
     assert "conversation_append" not in cfg.steps
-    assert "agent_executor" in cfg.steps
+    assert "agent_executor" not in cfg.steps
+    assert "provider_execution" in cfg.steps
+    assert "quota_check" in cfg.steps
+    assert "billing" in cfg.steps
 
 
 @pytest.mark.asyncio

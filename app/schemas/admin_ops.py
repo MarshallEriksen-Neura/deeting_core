@@ -220,7 +220,7 @@ class TenantQuotaUpdateRequest(BaseSchema):
 
 
 class TenantQuotaAdjustRequest(BaseSchema):
-    amount: float = Field(..., description="正数充值，负数扣减")
+    amount: float = Field(..., description="正数充值, 负数扣减")
     reason: str | None = None
 
 
@@ -371,6 +371,7 @@ class PluginMarketReviewAdminItem(BaseSchema):
     destructive_actions: list[str] = Field(default_factory=list)
     privacy_risks: list[str] = Field(default_factory=list)
     findings: list[PluginMarketReviewFinding] = Field(default_factory=list)
+    manifest_json: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime
 
