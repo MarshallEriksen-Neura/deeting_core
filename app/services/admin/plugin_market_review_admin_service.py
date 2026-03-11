@@ -45,6 +45,7 @@ class PluginMarketReviewAdminService:
                 reason=reason or "approved by admin dashboard",
             ),
         )
+        self._enqueue_qdrant_sync(skill_id)
         return self._to_item(updated)
 
     async def reject_review(
@@ -61,6 +62,7 @@ class PluginMarketReviewAdminService:
                 reason=reason or "rejected by admin dashboard",
             ),
         )
+        self._enqueue_qdrant_remove(skill_id)
         return self._to_item(updated)
 
     async def _get_pending_skill_or_404(self, skill_id: str) -> SkillRegistry:
@@ -96,6 +98,18 @@ class PluginMarketReviewAdminService:
         }
         manifest["deeting_ingestion"] = ingestion
         return {"status": target_status, "manifest_json": manifest}
+
+    @staticmethod
+    def _enqueue_qdrant_sync(skill_id: str) -> None:
+        from app.tasks.skill_registry import sync_skill_to_qdrant
+
+        sync_skill_to_qdrant.delay(skill_id)
+
+    @staticmethod
+    def _enqueue_qdrant_remove(skill_id: str) -> None:
+        from app.tasks.skill_registry import remove_skill_from_qdrant
+
+        remove_skill_from_qdrant.delay(skill_id)
 
     def _to_item(self, skill: SkillRegistry) -> PluginMarketReviewAdminItem:
         manifest = skill.manifest_json or {}
@@ -165,4 +179,3 @@ class PluginMarketReviewAdminService:
             return Datetime.from_iso_string(value)
         except ValueError:
             return None
-

@@ -33,7 +33,7 @@ class PluginMarketService:
         await registry_service.sync_projection_sources()
         role_names = await registry_service._fetch_user_role_names(user_id=user.id)
         assets = await registry_service.repo.list_system_assets(
-            asset_kind="capability",
+            asset_kind="skill_bundle",
             status="active",
             limit=max(200, limit * 5),
         )

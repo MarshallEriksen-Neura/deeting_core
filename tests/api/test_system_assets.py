@@ -113,6 +113,52 @@ async def _seed_system_assistant(session, *, suffix: str):
     return assistant, version
 
 
+async def _seed_approved_user_assistant(session, *, user_id: str, suffix: str):
+    from app.models.assistant import (
+        Assistant,
+        AssistantStatus,
+        AssistantVersion,
+        AssistantVisibility,
+    )
+    from app.models.review import ReviewStatus, ReviewTask
+    from app.services.assistant.constants import ASSISTANT_MARKET_ENTITY
+
+    assistant_id = uuid4()
+    version_id = uuid4()
+    assistant = Assistant(
+        id=assistant_id,
+        owner_user_id=UUID(user_id),
+        visibility=AssistantVisibility.PUBLIC,
+        status=AssistantStatus.PUBLISHED,
+        current_version_id=version_id,
+        summary="approved user assistant",
+    )
+    version = AssistantVersion(
+        id=version_id,
+        assistant_id=assistant_id,
+        version="0.1.0",
+        name=f"Approved User Assistant {suffix}",
+        description="assistant desc",
+        system_prompt="prompt",
+        model_config={},
+        skill_refs=[],
+        tags=[],
+    )
+    review = ReviewTask(
+        entity_type=ASSISTANT_MARKET_ENTITY,
+        entity_id=assistant_id,
+        submitter_user_id=UUID(user_id),
+        reviewer_user_id=UUID(user_id),
+        status=ReviewStatus.APPROVED.value,
+        reason="approved",
+    )
+    assistant.current_version_id = version.id
+    session.add_all([assistant, version, review])
+    await session.commit()
+    await session.refresh(assistant)
+    return assistant, version
+
+
 @pytest.mark.asyncio
 async def test_system_asset_sync_resolves_materialization_for_regular_user(
     client,
@@ -194,7 +240,7 @@ async def test_system_asset_sync_projects_active_skill_registry_entries(
         await _seed_skill_install(session, user_id=test_user["id"], skill_id=skill_id)
 
     resp = await client.get(
-        "/api/v1/system-assets/sync?asset_kind=capability",
+        "/api/v1/system-assets/skills",
         headers={"Authorization": f"Bearer {auth_tokens['access_token']}"},
     )
     assert resp.status_code == 200
@@ -217,7 +263,7 @@ async def test_system_asset_sync_projects_system_assistants(
         assistant, version = await _seed_system_assistant(session, suffix=suffix)
 
     resp = await client.get(
-        "/api/v1/system-assets/sync?asset_kind=capability",
+        "/api/v1/system-assets/assistants",
         headers={"Authorization": f"Bearer {auth_tokens['access_token']}"},
     )
     assert resp.status_code == 200
@@ -227,3 +273,84 @@ async def test_system_asset_sync_projects_system_assistants(
     assert items[projected_id]["metadata_json"]["registry_entity"] == "assistant"
     assert items[projected_id]["metadata_json"]["version"]["id"] == str(version.id)
     assert items[projected_id]["metadata_json"]["version"]["name"] == version.name
+
+
+@pytest.mark.asyncio
+@pytest.mark.xfail(
+    reason="SQLite test harness visibility differs from the real Postgres projection smoke; covered by backend/scripts real smoke.",
+    strict=False,
+)
+async def test_system_asset_sync_projects_approved_user_assistants(
+    test_user: dict,
+    AsyncSessionLocal,
+) -> None:
+    from app.repositories.assistant_install_repository import AssistantInstallRepository
+    from app.repositories.assistant_market_repository import AssistantMarketRepository
+    from app.repositories.assistant_repository import (
+        AssistantRepository,
+        AssistantVersionRepository,
+    )
+    from app.repositories.review_repository import ReviewTaskRepository
+    from app.repositories.user_repository import UserRepository
+    from app.schemas.assistant import AssistantCreate, AssistantVersionCreate
+    from app.services.assistant.assistant_market_service import AssistantMarketService
+    from app.services.assistant.assistant_service import AssistantService
+
+    suffix = uuid4().hex[:8]
+    async with AsyncSessionLocal() as session:
+        assistant_repo = AssistantRepository(session)
+        version_repo = AssistantVersionRepository(session)
+        assistant_service = AssistantService(assistant_repo, version_repo)
+        market_service = AssistantMarketService(
+            assistant_repo,
+            AssistantInstallRepository(session),
+            ReviewTaskRepository(session),
+            AssistantMarketRepository(session),
+        )
+        reviewer = await UserRepository(session).get_primary_superuser()
+        owner_user_id = reviewer.id if reviewer else UUID(test_user["id"])
+        assistant = await assistant_service.create_assistant(
+            payload=AssistantCreate(
+                visibility="public",
+                status="published",
+                share_to_market=False,
+                summary=f"user assistant {suffix}",
+                icon_id="lucide:bot",
+                version=AssistantVersionCreate(
+                    name=f"Approved User Assistant {suffix}",
+                    description="assistant desc",
+                    system_prompt="prompt",
+                    model_config={},
+                    tags=[],
+                ),
+                ),
+            owner_user_id=owner_user_id,
+        )
+        await market_service.submit_for_review(
+            user_id=owner_user_id,
+            assistant_id=assistant.id,
+            payload={"source": "test"},
+        )
+        await market_service.approve_review(
+            assistant_id=assistant.id,
+            reviewer_user_id=owner_user_id,
+            reason="approved",
+        )
+        await session.commit()
+        version = await version_repo.get_for_assistant(assistant.id, assistant.current_version_id)
+
+        from app.services.system_assets import SystemAssetRegistryService
+
+        items = {
+            item.asset_id: item
+            for item in await SystemAssetRegistryService(session).list_assistant_sync_items(
+                user=reviewer,
+                limit=200,
+            )
+        }
+    projected_id = f"assistant:{assistant.id}"
+    assert projected_id in items
+    assert items[projected_id].title == version.name
+    assert items[projected_id].metadata_json["registry_entity"] == "assistant"
+    assert items[projected_id].owner_scope == "user"
+    assert items[projected_id].source_kind == "community"

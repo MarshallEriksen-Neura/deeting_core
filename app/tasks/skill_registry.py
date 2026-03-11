@@ -18,6 +18,7 @@ from app.services.skill_registry.skill_runtime_executor import SkillRuntimeExecu
 from app.services.skill_registry.skill_self_heal_service import SkillSelfHealService
 from app.storage.qdrant_kb_collections import get_skill_collection_name
 from app.storage.qdrant_kb_store import ensure_collection_vector_size, upsert_points
+from app.storage.qdrant_kb_store import delete_points
 from app.tasks.async_runner import run_async
 
 logger = logging.getLogger(__name__)
@@ -382,6 +383,29 @@ def sync_skill_to_qdrant(skill_id: str) -> str:
         return "failed"
 
 
+async def _run_remove_skill(skill_id: str) -> str:
+    if not qdrant_is_configured():
+        return "skipped"
+
+    client = get_qdrant_client()
+    await delete_points(
+        client,
+        collection_name=SKILL_COLLECTION_NAME,
+        points_ids=[skill_id],
+        wait=True,
+    )
+    return "removed"
+
+
+@celery_app.task(name="skill_registry.remove_from_qdrant")
+def remove_skill_from_qdrant(skill_id: str) -> str:
+    try:
+        return run_async(_run_remove_skill(skill_id))
+    except Exception as exc:
+        logger.exception("skill_registry_remove_from_qdrant_failed: %s", exc)
+        return "failed"
+
+
 async def _run_repo_ingestion(
     repo_url: str,
     revision: str = "main",
@@ -429,8 +453,22 @@ async def _run_repo_ingestion(
             submission_channel=submission_channel,
         )
 
+        needs_admin_review = bool(
+            result.get("manifest", {})
+            .get("deeting_ingestion", {})
+            .get("requires_admin_approval")
+        ) if isinstance(result, dict) else False
         await push_task_progress(
-            user_id, job_id, "completed", f"技能 '{result.get('skill_id')}' 已成功接入并注册！", status="completed", percentage=100
+            user_id,
+            job_id,
+            "completed",
+            (
+                f"技能 '{result.get('skill_id')}' 已提交，等待管理员审核。"
+                if needs_admin_review
+                else f"技能 '{result.get('skill_id')}' 已成功接入并注册！"
+            ),
+            status="completed",
+            percentage=100,
         )
         return result
 
@@ -457,10 +495,6 @@ def ingest_skill_repo(
                 submission_channel=submission_channel,
             )
         )
-        if isinstance(result, dict):
-            resolved_skill_id = result.get("skill_id")
-            if resolved_skill_id:
-                _trigger_dry_run(str(resolved_skill_id))
         return result
     except Exception as exc:
         logger.exception("skill_registry_ingest_repo_failed: %s", exc)
@@ -492,10 +526,3 @@ def dry_run_skill(skill_id: str) -> dict | str:
     except Exception as exc:
         logger.exception("skill_registry_dry_run_failed: %s", exc)
         return "failed"
-
-
-def _trigger_dry_run(skill_id: str) -> None:
-    if hasattr(dry_run_skill, "apply_async"):
-        dry_run_skill.apply_async(args=[skill_id], queue="skill_registry")
-    else:
-        dry_run_skill(skill_id)

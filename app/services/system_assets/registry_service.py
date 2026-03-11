@@ -2,13 +2,15 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.assistant import Assistant, AssistantStatus, AssistantVersion, AssistantVisibility
 from app.models import Role, User, UserRole
+from app.models.review import ReviewStatus, ReviewTask
 from app.models.skill_registry import SkillRegistry
 from app.models.system_asset import SystemAsset
+from app.services.assistant.constants import ASSISTANT_MARKET_ENTITY
 from app.repositories.system_asset_repository import SystemAssetRepository
 from app.repositories.user_skill_installation_repository import (
     UserSkillInstallationRepository,
@@ -24,7 +26,33 @@ class SystemAssetRegistryService:
         self.session = session
         self.repo = SystemAssetRepository(session)
 
-    async def list_sync_items(
+    async def list_assistant_sync_items(
+        self,
+        *,
+        user: User,
+        limit: int = 100,
+    ) -> list[SystemAssetSyncItem]:
+        return await self._list_sync_items(
+            user=user,
+            registry_entity="assistant",
+            asset_kind="assistant_template",
+            limit=limit,
+        )
+
+    async def list_skill_sync_items(
+        self,
+        *,
+        user: User,
+        limit: int = 100,
+    ) -> list[SystemAssetSyncItem]:
+        return await self._list_sync_items(
+            user=user,
+            registry_entity="skill",
+            asset_kind="skill_bundle",
+            limit=limit,
+        )
+
+    async def list_generic_sync_items(
         self,
         *,
         user: User,
@@ -38,9 +66,11 @@ class SystemAssetRegistryService:
             limit=limit,
         )
         role_names = await self._fetch_user_role_names(user_id=user.id)
-        skill_install_map = await self._fetch_user_skill_install_map(user_id=user.id)
         items: list[SystemAssetSyncItem] = []
         for asset in assets:
+            metadata = asset.metadata_json if isinstance(asset.metadata_json, dict) else {}
+            if metadata.get("registry_entity") in {"assistant", "skill"}:
+                continue
             policy = self._build_policy_snapshot(asset=asset, user=user, role_names=role_names)
             if policy.materialization_state == "hidden":
                 continue
@@ -55,10 +85,7 @@ class SystemAssetRegistryService:
                     version=asset.version,
                     artifact_ref=asset.artifact_ref,
                     checksum=asset.checksum,
-                    metadata_json=self._build_sync_metadata(
-                        asset=asset,
-                        skill_install_map=skill_install_map,
-                    ),
+                    metadata_json=dict(metadata),
                     policy_snapshot=policy,
                 )
             )
@@ -67,7 +94,7 @@ class SystemAssetRegistryService:
     async def list_visible_system_assistant_ids(self, *, user: User) -> set[UUID]:
         await self.sync_projection_sources()
         assets = await self.repo.list_system_assets(
-            asset_kind="capability",
+            asset_kind="assistant_template",
             status="active",
             limit=1000,
         )
@@ -134,7 +161,7 @@ class SystemAssetRegistryService:
                 obj_in={
                     "title": skill.name,
                     "description": skill.description,
-                    "asset_kind": "capability",
+                    "asset_kind": "skill_bundle",
                     "owner_scope": "system",
                     "source_kind": source_kind,
                     "version": skill.version or "0.0.0",
@@ -153,21 +180,40 @@ class SystemAssetRegistryService:
 
     async def sync_system_assistant_projections(self) -> None:
         result = await self.session.execute(
-            select(Assistant, AssistantVersion)
+            select(Assistant, AssistantVersion, ReviewTask.status)
             .join(AssistantVersion, Assistant.current_version_id == AssistantVersion.id)
+            .join(
+                ReviewTask,
+                and_(
+                    ReviewTask.entity_type == ASSISTANT_MARKET_ENTITY,
+                    ReviewTask.entity_id == Assistant.id,
+                ),
+                isouter=True,
+            )
             .where(
-                Assistant.owner_user_id.is_(None),
                 Assistant.status == AssistantStatus.PUBLISHED,
+                or_(
+                    Assistant.owner_user_id.is_(None),
+                    ReviewTask.status == ReviewStatus.APPROVED.value,
+                ),
             )
         )
         rows = result.all()
-        for assistant, version in rows:
+        for assistant, version, review_status in rows:
             visibility = (
                 assistant.visibility.value
                 if isinstance(assistant.visibility, AssistantVisibility)
                 else str(assistant.visibility)
             )
             is_public = visibility == AssistantVisibility.PUBLIC.value
+            is_system_assistant = assistant.owner_user_id is None
+            if assistant.owner_user_id is not None and not is_public:
+                continue
+            if (
+                assistant.owner_user_id is not None
+                and review_status != ReviewStatus.APPROVED.value
+            ):
+                continue
             asset_id = f"assistant:{assistant.id}"
             existing = await self.repo.get_by_asset_id(asset_id)
             policy = self._merge_projection_policy(
@@ -186,9 +232,9 @@ class SystemAssetRegistryService:
                 obj_in={
                     "title": version.name,
                     "description": version.description or assistant.summary,
-                    "asset_kind": "capability",
-                    "owner_scope": "system",
-                    "source_kind": "official",
+                    "asset_kind": "assistant_template",
+                    "owner_scope": "system" if is_system_assistant else "user",
+                    "source_kind": "official" if is_system_assistant else "community",
                     "version": version.version,
                     "artifact_ref": assistant.share_slug,
                     "checksum": str(version.id),
@@ -263,6 +309,54 @@ class SystemAssetRegistryService:
             skill_install_map.get(skill_id)
         )
         return metadata
+
+    async def _list_sync_items(
+        self,
+        *,
+        user: User,
+        registry_entity: str,
+        asset_kind: str,
+        limit: int,
+    ) -> list[SystemAssetSyncItem]:
+        await self.sync_projection_sources()
+        assets = await self.repo.list_system_assets(
+            asset_kind=asset_kind,
+            status="active",
+            limit=limit,
+        )
+        role_names = await self._fetch_user_role_names(user_id=user.id)
+        skill_install_map = (
+            await self._fetch_user_skill_install_map(user_id=user.id)
+            if registry_entity == "skill"
+            else {}
+        )
+        items: list[SystemAssetSyncItem] = []
+        for asset in assets:
+            metadata = asset.metadata_json if isinstance(asset.metadata_json, dict) else {}
+            if metadata.get("registry_entity") != registry_entity:
+                continue
+            policy = self._build_policy_snapshot(asset=asset, user=user, role_names=role_names)
+            if policy.materialization_state == "hidden":
+                continue
+            items.append(
+                SystemAssetSyncItem(
+                    asset_id=asset.asset_id,
+                    title=asset.title,
+                    description=asset.description,
+                    asset_kind=asset.asset_kind,
+                    owner_scope=asset.owner_scope,
+                    source_kind=asset.source_kind,
+                    version=asset.version,
+                    artifact_ref=asset.artifact_ref,
+                    checksum=asset.checksum,
+                    metadata_json=self._build_sync_metadata(
+                        asset=asset,
+                        skill_install_map=skill_install_map,
+                    ),
+                    policy_snapshot=policy,
+                )
+            )
+        return items
 
     @staticmethod
     def _serialize_user_skill_install(install: object | None) -> dict | None:
