@@ -41,6 +41,7 @@ async def list_plugins(
             version=skill.version,
             source_repo=skill.artifact_ref,
             source_revision=skill.checksum,
+            source_kind=skill.source_kind,
             status=skill.status,
             installed=installed,
             created_at=skill.created_at,
