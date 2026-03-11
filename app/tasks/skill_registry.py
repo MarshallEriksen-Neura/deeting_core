@@ -223,7 +223,7 @@ async def _run_seed_builtins() -> dict[str, int]:
                     skill_id = manifest.get("id")
                     if not skill_id: continue
                     
-                    # Read llm-tool.yaml if exists
+                    # Read optional host contract (llm-tool.yaml) if it exists
                     llm_tool_path = skill_dir / "llm-tool.yaml"
                     tools = []
                     if llm_tool_path.exists():

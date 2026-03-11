@@ -1,14 +1,14 @@
 # Agent Plugins
 
-This directory contains the new plugin system for AI Agents, migrated from `backend_old`.
+This directory contains the backend host/runtime plugin layer for AI Agents, migrated from `backend_old`.
 
 ## Structure
 
 - **core/**: Core interfaces and managers (`PluginManager`, `AgentPlugin`, `PluginContext`).
-- **builtins/**: Built-in plugins (e.g., Provider Registry, Crawler).
+- **builtins/**: Built-in host/runtime plugins (e.g., Provider Registry, Crawler).
 - **examples/**: Example plugins (e.g., `HelloWorldPlugin`).
 
-## Creating a New Plugin
+## Creating a New Host Plugin
 
 1. Inherit from `app.agent_plugins.core.interfaces.AgentPlugin`.
 2. Implement `metadata` and `get_tools` (optional).
@@ -17,4 +17,4 @@ This directory contains the new plugin system for AI Agents, migrated from `back
 
 ## Usage
 
-Plugins are managed by `app.agent_plugins.core.manager.PluginManager`.
+Host/runtime plugins are managed by `app.agent_plugins.core.manager.PluginManager`.
