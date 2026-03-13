@@ -28,6 +28,23 @@ class UserRepository:
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def get_identity(self, provider: str, external_id: str) -> Identity | None:
+        stmt = select(Identity).where(
+            Identity.provider == provider,
+            Identity.external_id == external_id,
+        )
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def list_identities(
+        self, user_id: UUID, providers: list[str] | None = None
+    ) -> list[Identity]:
+        stmt = select(Identity).where(Identity.user_id == user_id).order_by(Identity.created_at.asc())
+        if providers:
+            stmt = stmt.where(Identity.provider.in_(providers))
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
     async def permission_codes(self, user_id: UUID) -> set[str]:
         stmt = (
             select(Permission.code)

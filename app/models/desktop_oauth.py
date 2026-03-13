@@ -16,6 +16,9 @@ class DesktopOAuthSession(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __tablename__ = "desktop_oauth_session"
 
     provider: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    intent: Mapped[str] = mapped_column(
+        String(32), nullable=False, index=True, default="login"
+    )
     state: Mapped[str] = mapped_column(String(255), nullable=False, unique=True, index=True)
     code_verifier: Mapped[str] = mapped_column(Text, nullable=False)
     redirect_scheme: Mapped[str] = mapped_column(String(64), nullable=False, default="deeting")

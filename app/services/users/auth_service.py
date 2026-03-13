@@ -64,10 +64,11 @@ class AuthService:
         self, email: str, invite_code: str | None = None, client_ip: str | None = None
     ) -> None:
         """发送登录验证码；首登时会校验/预占邀请码。"""
+        normalized_email = self._normalize_login_email(email)
         # 登录限流
-        await self.check_login_rate_limit(email, client_ip)
+        await self.check_login_rate_limit(normalized_email, client_ip)
 
-        user = await self.user_repo.get_by_email(email)
+        user = await self._get_user_by_login_email(normalized_email)
         if not user:
             # 新用户需遵循注册策略（是否必须邀请码）。
             if settings.REGISTRATION_CONTROL_ENABLED and not invite_code:
@@ -85,12 +86,12 @@ class AuthService:
                 window = await self.provisioner.invite_service.consume(invite_code)
                 # 记录到 Redis，便于 login_with_code 使用并最终 finalize
                 await cache.set(
-                    CacheKeys.temp_invite(email),
+                    CacheKeys.temp_invite(normalized_email),
                     {"code": invite_code, "window_id": str(window.id)},
                     ttl=600,
                 )
 
-        await self.send_verification_code(email, "login", client_ip=client_ip)
+        await self.send_verification_code(normalized_email, "login", client_ip=client_ip)
 
     def _is_dev_env(self) -> bool:
         return settings.ENVIRONMENT.lower() in {"test", "development"}
@@ -140,11 +141,12 @@ class AuthService:
         invite_code: str | None = None,
         username: str | None = None,
     ) -> tuple[User, bool]:
-        user = await self.user_repo.get_by_email(email)
+        normalized_email = self._normalize_login_email(email)
+        user = await self._get_user_by_login_email(normalized_email)
         if user is None:
             return (
                 await self._provision_login_user(
-                    email=email,
+                    email=normalized_email,
                     invite_code=invite_code,
                     username=username,
                 ),
@@ -152,6 +154,17 @@ class AuthService:
             )
 
         return await self._activate_user_for_login(user), False
+
+    @staticmethod
+    def _normalize_login_email(email: str) -> str:
+        return str(email or "").strip().lower()
+
+    async def _get_user_by_login_email(self, email: str) -> User | None:
+        normalized_email = self._normalize_login_email(email)
+        alias_user = await self.user_repo.get_by_identity("email_code", normalized_email)
+        if alias_user:
+            return alias_user
+        return await self.user_repo.get_by_email(normalized_email)
 
     @staticmethod
     def _extract_token_identity(token: str | None) -> tuple[str | None, str | None]:
@@ -174,6 +187,7 @@ class AuthService:
         user_agent: str | None = None,
     ) -> TokenPair:
         """邮箱验证码登录（若不存在则自动注册并可绑定邀请码）。"""
+        email = self._normalize_login_email(email)
         await self.check_login_rate_limit(email, client_ip)
 
         if not await self.verify_code(email, code, "login", client_ip=client_ip):
