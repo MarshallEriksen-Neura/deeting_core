@@ -3,9 +3,13 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
-McpServerType = Literal["sse", "stdio"]
+McpServerType = Literal["sse", "stdio", "streamable-http"]
 McpAvailabilityLane = Literal["callable_now", "installable", "advisory"]
 McpIndexStatus = Literal["indexed", "missing", "unknown"]
+
+
+def is_remote_server_type(server_type: str) -> bool:
+    return server_type in {"sse", "streamable-http"}
 
 
 def _tool_names(payloads: list[dict] | None) -> list[str]:
@@ -41,7 +45,7 @@ def _derive_server_recommended_action(
     runtime_ready: bool,
     index_status: McpIndexStatus,
 ) -> str | None:
-    if model.server_type != "sse":
+    if not is_remote_server_type(model.server_type):
         return None
     if not model.is_enabled:
         return "enable_server"
@@ -60,7 +64,8 @@ class UserMcpServerBase(BaseModel):
     )
     is_enabled: bool = Field(True, description="Whether the server is enabled")
     server_type: McpServerType = Field(
-        "sse", description="Server type: sse (remote) or stdio (draft)"
+        "sse",
+        description="Server type: sse/streamable-http (remote) or stdio (draft)",
     )
     auth_type: str = Field("bearer", description="bearer, api_key, or none")
 
@@ -137,7 +142,7 @@ class UserMcpServerResponse(UserMcpServerBase):
         count = len(model.tools_cache) if model.tools_cache else 0
         enabled_tool_names = _enabled_tool_names(model) if model.is_enabled else set()
         runtime_ready = bool(
-            model.server_type == "sse" and model.is_enabled and count > 0
+            is_remote_server_type(model.server_type) and model.is_enabled and count > 0
         )
         if model.server_type == "stdio":
             runtime_status_reason = "draft_config"
@@ -186,7 +191,9 @@ class UserMcpServerResponse(UserMcpServerBase):
             runtime_status_reason=runtime_status_reason,
             availability_lane=availability_lane,
             recommended_action=recommended_action,
-            activation_required=bool(model.server_type == "sse" and not model.is_enabled),
+            activation_required=bool(
+                is_remote_server_type(model.server_type) and not model.is_enabled
+            ),
             install_required=bool(model.server_type == "stdio"),
             index_status=index_status,
             index_status_reason=index_status_reason,
@@ -237,7 +244,7 @@ class McpServerToolItem(BaseModel):
         runtime_ready = bool(
             name
             and enabled
-            and server_model.server_type == "sse"
+            and is_remote_server_type(server_model.server_type)
             and server_model.is_enabled
         )
         if server_model.server_type == "stdio":
@@ -273,13 +280,13 @@ class McpServerToolItem(BaseModel):
             recommended_action=(
                 "wait_for_runtime"
                 if enabled
-                and server_model.server_type == "sse"
+                and is_remote_server_type(server_model.server_type)
                 and not server_model.is_enabled
                 else None
             ),
             activation_required=bool(
                 enabled
-                and server_model.server_type == "sse"
+                and is_remote_server_type(server_model.server_type)
                 and not server_model.is_enabled
             ),
             install_required=bool(server_model.server_type == "stdio"),

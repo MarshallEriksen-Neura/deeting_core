@@ -5,6 +5,7 @@ from typing import Any
 import httpx
 from mcp import ClientSession
 from mcp.client.sse import sse_client
+from mcp.client.streamable_http import streamable_http_client
 
 from app.core.config import settings
 from app.schemas.tool import ToolDefinition
@@ -59,8 +60,28 @@ class MCPClient:
             kwargs["auth"] = auth
         return httpx.AsyncClient(**kwargs)
 
+    @staticmethod
+    def _is_http_405_error(error: Exception) -> bool:
+        current: BaseException | None = error
+        visited: set[int] = set()
+
+        while current and id(current) not in visited:
+            visited.add(id(current))
+            if (
+                isinstance(current, httpx.HTTPStatusError)
+                and current.response is not None
+                and current.response.status_code == 405
+            ):
+                return True
+            current = current.__cause__ or current.__context__
+
+        return False
+
     async def fetch_tools(
-        self, sse_url: str, headers: dict[str, str] | None = None
+        self,
+        sse_url: str,
+        headers: dict[str, str] | None = None,
+        transport_type: str = "sse",
     ) -> list[ToolDefinition]:
         """
         Discovers tools from a remote MCP server using official SDK.
@@ -68,7 +89,11 @@ class MCPClient:
         last_error: Exception | None = None
         for attempt in range(self.max_retries):
             try:
-                return await self._fetch_tools_once(sse_url, headers=headers)
+                return await self._fetch_tools_once(
+                    sse_url,
+                    headers=headers,
+                    transport_type=transport_type,
+                )
             except Exception as e:
                 last_error = e
                 if attempt >= self.max_retries - 1:
@@ -89,34 +114,32 @@ class MCPClient:
             raise MCPClientError(f"Failed to fetch tools: {last_error}") from last_error
         raise MCPClientError("Failed to fetch tools: unknown error")
 
-    async def _fetch_tools_once(
-        self, sse_url: str, headers: dict[str, str] | None = None
+    async def _fetch_tools_once_streamable_http(
+        self,
+        sse_url: str,
+        headers: dict[str, str] | None = None,
     ) -> list[ToolDefinition]:
-        try:
-            # Note: sse_client context manager yields (read_stream, write_stream)
-            # We assume sse_client handles headers if supported, otherwise we might need to modify it or accept defaults.
-            # Currently mcp 1.25.0 sse_client accepts headers.
-            async with sse_client(
+        async with self._httpx_client_factory(headers=headers) as http_client:
+            async with streamable_http_client(
                 sse_url,
-                headers=headers,
-                timeout=self.timeout,
-                httpx_client_factory=self._httpx_client_factory,
+                http_client=http_client,
             ) as (
                 read,
                 write,
+                _,
             ):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
 
-                    # List tools
                     result = await session.list_tools()
 
                     tools: list[ToolDefinition] = []
                     for t in result.tools:
-                        # Capture extra fields not explicitly in MCP standard but often present
                         raw = t.model_dump() if hasattr(t, "model_dump") else {}
                         output_schema = raw.get("outputSchema") or raw.get("output_schema")
-                        output_description = raw.get("outputDescription") or raw.get("output_description")
+                        output_description = raw.get("outputDescription") or raw.get(
+                            "output_description"
+                        )
 
                         tools.append(
                             ToolDefinition(
@@ -128,8 +151,95 @@ class MCPClient:
                             )
                         )
                     return tools
+
+    async def _fetch_tools_once(
+        self,
+        sse_url: str,
+        headers: dict[str, str] | None = None,
+        transport_type: str = "sse",
+    ) -> list[ToolDefinition]:
+        try:
+            if transport_type == "streamable-http":
+                return await self._fetch_tools_once_streamable_http(
+                    sse_url,
+                    headers=headers,
+                )
+
+            try:
+                # Note: sse_client context manager yields (read_stream, write_stream)
+                # We assume sse_client handles headers if supported, otherwise we might need to modify it or accept defaults.
+                # Currently mcp 1.25.0 sse_client accepts headers.
+                async with sse_client(
+                    sse_url,
+                    headers=headers,
+                    timeout=self.timeout,
+                    httpx_client_factory=self._httpx_client_factory,
+                ) as (
+                    read,
+                    write,
+                ):
+                    async with ClientSession(read, write) as session:
+                        await session.initialize()
+
+                        # List tools
+                        result = await session.list_tools()
+
+                        tools: list[ToolDefinition] = []
+                        for t in result.tools:
+                            # Capture extra fields not explicitly in MCP standard but often present
+                            raw = t.model_dump() if hasattr(t, "model_dump") else {}
+                            output_schema = raw.get("outputSchema") or raw.get(
+                                "output_schema"
+                            )
+                            output_description = raw.get("outputDescription") or raw.get(
+                                "output_description"
+                            )
+
+                            tools.append(
+                                ToolDefinition(
+                                    name=t.name,
+                                    description=t.description,
+                                    input_schema=t.inputSchema,
+                                    output_schema=output_schema,
+                                    output_description=output_description,
+                                )
+                            )
+                        return tools
+            except Exception as e:
+                if self._is_http_405_error(e):
+                    logger.warning(
+                        "MCP SSE transport returned HTTP 405 for %s; falling back to streamable HTTP",
+                        sse_url,
+                    )
+                    return await self._fetch_tools_once_streamable_http(
+                        sse_url,
+                        headers=headers,
+                    )
+                raise
         except Exception as e:
             raise MCPClientError(f"SDK Error: {e}") from e
+
+    async def _call_tool_streamable_http(
+        self,
+        sse_url: str,
+        tool_name: str,
+        arguments: dict[str, Any],
+        headers: dict[str, str] | None = None,
+    ) -> Any:
+        async with self._httpx_client_factory(headers=headers) as http_client:
+            async with streamable_http_client(
+                sse_url,
+                http_client=http_client,
+            ) as (
+                read,
+                write,
+                _,
+            ):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+
+                    result = await session.call_tool(tool_name, arguments)
+                    return result.content
 
     async def call_tool(
         self,
@@ -137,22 +247,45 @@ class MCPClient:
         tool_name: str,
         arguments: dict[str, Any],
         headers: dict[str, str] | None = None,
+        transport_type: str = "sse",
     ) -> Any:
         try:
-            async with sse_client(
-                sse_url,
-                headers=headers,
-                timeout=self.timeout,
-                httpx_client_factory=self._httpx_client_factory,
-            ) as (
-                read,
-                write,
-            ):
-                async with ClientSession(read, write) as session:
-                    await session.initialize()
+            if transport_type == "streamable-http":
+                return await self._call_tool_streamable_http(
+                    sse_url,
+                    tool_name,
+                    arguments,
+                    headers=headers,
+                )
 
-                    result = await session.call_tool(tool_name, arguments)
-                    return result.content
+            try:
+                async with sse_client(
+                    sse_url,
+                    headers=headers,
+                    timeout=self.timeout,
+                    httpx_client_factory=self._httpx_client_factory,
+                ) as (
+                    read,
+                    write,
+                ):
+                    async with ClientSession(read, write) as session:
+                        await session.initialize()
+
+                        result = await session.call_tool(tool_name, arguments)
+                        return result.content
+            except Exception as e:
+                if self._is_http_405_error(e):
+                    logger.warning(
+                        "MCP SSE transport returned HTTP 405 for %s; falling back to streamable HTTP",
+                        sse_url,
+                    )
+                    return await self._call_tool_streamable_http(
+                        sse_url,
+                        tool_name,
+                        arguments,
+                        headers=headers,
+                    )
+                raise
 
         except Exception as e:
             logger.exception("MCP call_tool failed")

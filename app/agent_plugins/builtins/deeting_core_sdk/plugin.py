@@ -1822,7 +1822,7 @@ class DeetingCoreSdkPlugin(AgentPlugin):
             stmt = select(UserMcpServer).where(
                 UserMcpServer.user_id == self.context.user_id,
                 UserMcpServer.is_enabled == True,
-                UserMcpServer.server_type == "sse",
+                UserMcpServer.server_type.in_(["sse", "streamable-http"]),
             )
             rows = await db_session.execute(stmt)
             servers = rows.scalars().all()
@@ -1842,6 +1842,7 @@ class DeetingCoreSdkPlugin(AgentPlugin):
                         tool_name,
                         arguments,
                         headers=headers,
+                        transport_type=server.server_type,
                     )
                 except Exception as exc:
                     logger.warning(
