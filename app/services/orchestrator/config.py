@@ -134,6 +134,7 @@ INTERNAL_CHAT_WORKFLOW = WorkflowConfig(
         "mcp_discovery",  # 3.5) MCP 工具发现 (User BYOP)
         "jit_persona_tool_injection",  # 3.6) JIT Persona 工具注入（仅 auto）
         "semantic_kernel",  # 3.7) 语义内核主动感知 (Memory Injection)
+        "knowledge_selection_injection",  # 3.8) 显式选择知识文件注入
         "quota_check",  # 4) 配额/余额检查（与外部一致）
         "rate_limit",  # 5) 限流
         "routing",  # 6) 路由决策
