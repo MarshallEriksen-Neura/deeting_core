@@ -31,6 +31,7 @@ class PluginMarketSkillItem(TimestampSchema):
     source_kind: str = "community"
     status: str
     installed: bool = False
+    compatibility: dict | None = None
 
 
 class PluginInstallRequest(BaseSchema):

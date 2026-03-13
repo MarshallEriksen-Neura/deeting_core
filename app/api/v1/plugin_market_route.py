@@ -44,6 +44,9 @@ async def list_plugins(
             source_kind=skill.source_kind,
             status=skill.status,
             installed=installed,
+            compatibility=(skill.metadata_json or {}).get("manifest", {}).get("compatibility")
+            if isinstance((skill.metadata_json or {}).get("manifest"), dict)
+            else None,
             created_at=skill.created_at,
             updated_at=skill.updated_at,
         )
