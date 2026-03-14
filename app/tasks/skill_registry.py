@@ -277,16 +277,12 @@ async def _run_seed_builtins() -> dict[str, int]:
                 # Skip if already migrated to official-skills
                 if p_id in [
                     "core.tools.crawler", 
-                    "system.code_interpreter", 
-                    "system.planner",
                     "system.image_generation",
                     "system/vector_store",
                     "system.expert_network",
-                    "system/database_manager",
                     "system/monitor",
                     "system/task_scheduler",
                     "core.registry.provider",
-                    "core.tools.provider_probe",
                     "core.execution.skill_runner"
                 ]:
                     continue

@@ -58,7 +58,7 @@ async def test_plugin_market_lists_registry_projected_skills_for_regular_user(
     AsyncSessionLocal,
 ) -> None:
     public_id = f"official.skills.monitor.{uuid4().hex}"
-    admin_id = f"official.skills.database.{uuid4().hex}"
+    admin_id = f"official.skills.ingestor.{uuid4().hex}"
 
     async with AsyncSessionLocal() as session:
         await _seed_market_skill(session, skill_id=public_id, name="Public Skill")
@@ -86,7 +86,7 @@ async def test_plugin_market_lists_admin_projected_skills_for_superuser(
     admin_tokens: dict,
     AsyncSessionLocal,
 ) -> None:
-    admin_id = f"official.skills.database.{uuid4().hex}"
+    admin_id = f"official.skills.ingestor.{uuid4().hex}"
 
     async with AsyncSessionLocal() as session:
         await _seed_market_skill(

@@ -35,3 +35,13 @@ class ProviderWish(BaseSchema):
     provider_name: str
     description: str | None = None
     url: str | None = None
+
+
+class ProviderPresetDesktopUpsertRequest(BaseSchema):
+    preset: ProviderPresetDTO
+
+
+class ProviderPresetDesktopUpsertResponse(BaseSchema):
+    status: str
+    slug: str
+    updated: bool
