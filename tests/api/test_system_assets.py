@@ -3,6 +3,7 @@ from __future__ import annotations
 from uuid import UUID, uuid4
 
 import pytest
+from sqlalchemy import select
 
 
 async def _seed_system_asset(session, **overrides):
@@ -250,6 +251,68 @@ async def test_system_asset_sync_projects_active_skill_registry_entries(
     assert items[projected_id]["metadata_json"]["registry_entity"] == "skill"
     assert items[projected_id]["metadata_json"]["user_install"]["alias"] == "desktop-installed"
     assert items[projected_id]["metadata_json"]["user_install"]["installed_revision"] == "rev-123"
+
+
+@pytest.mark.asyncio
+async def test_system_asset_sync_archives_disabled_skill_projection(
+    client,
+    auth_tokens: dict,
+    AsyncSessionLocal,
+) -> None:
+    from app.models.skill_registry import SkillRegistry
+    from app.models.system_asset import SystemAsset
+
+    skill_id = f"official.skills.retired.{uuid4().hex}"
+    asset_id = f"skill:{skill_id}"
+
+    async with AsyncSessionLocal() as session:
+        session.add(
+            SkillRegistry(
+                id=skill_id,
+                name="Retired Monitor",
+                description="retired skill",
+                version="1.0.0",
+                runtime="builtin",
+                status="disabled",
+                type="SKILL",
+                manifest_json={"id": skill_id},
+                env_requirements={},
+            )
+        )
+        session.add(
+            SystemAsset(
+                asset_id=asset_id,
+                title="Retired Monitor",
+                description="stale projection",
+                asset_kind="skill_bundle",
+                owner_scope="system",
+                source_kind="official",
+                version="1.0.0",
+                status="active",
+                visibility_scope="authenticated",
+                local_sync_policy="full",
+                execution_policy="allowed",
+                permission_grants=[],
+                allowed_role_names=[],
+                metadata_json={"registry_entity": "skill", "skill_id": skill_id},
+            )
+        )
+        await session.commit()
+
+    resp = await client.get(
+        "/api/v1/system-assets/skills",
+        headers={"Authorization": f"Bearer {auth_tokens['access_token']}"},
+    )
+    assert resp.status_code == 200
+    items = {item["asset_id"]: item for item in resp.json()["items"]}
+    assert asset_id not in items
+
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(SystemAsset).where(SystemAsset.asset_id == asset_id)
+        )
+        archived_asset = result.scalar_one()
+        assert archived_asset.status == "archived"
 
 
 @pytest.mark.asyncio

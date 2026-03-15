@@ -133,6 +133,7 @@ class SystemAssetRegistryService:
             )
         )
         skills = list(result.scalars().all())
+        active_asset_ids: set[str] = set()
         for skill in skills:
             manifest = skill.manifest_json if isinstance(skill.manifest_json, dict) else {}
             restricted = bool(manifest.get("restricted"))
@@ -142,7 +143,9 @@ class SystemAssetRegistryService:
                 visibility_scope = "role" if allowed_roles else "superuser"
             manifest_id = str(manifest.get("id") or skill.id)
             source_kind = "official" if manifest_id.startswith("official.") else "community"
-            existing = await self.repo.get_by_asset_id(f"skill:{skill.id}")
+            asset_id = f"skill:{skill.id}"
+            active_asset_ids.add(asset_id)
+            existing = await self.repo.get_by_asset_id(asset_id)
             policy = self._merge_projection_policy(
                 existing=existing,
                 defaults={
@@ -157,7 +160,7 @@ class SystemAssetRegistryService:
                 },
             )
             await self.repo.upsert_asset(
-                asset_id=f"skill:{skill.id}",
+                asset_id=asset_id,
                 obj_in={
                     "title": skill.name,
                     "description": skill.description,
@@ -177,6 +180,10 @@ class SystemAssetRegistryService:
                     **policy,
                 },
             )
+        await self.repo.archive_registry_entity_assets_except(
+            registry_entity="skill",
+            keep_asset_ids=active_asset_ids,
+        )
 
     async def sync_system_assistant_projections(self) -> None:
         result = await self.session.execute(
@@ -199,6 +206,7 @@ class SystemAssetRegistryService:
             )
         )
         rows = result.all()
+        active_asset_ids: set[str] = set()
         for assistant, version, review_status in rows:
             visibility = (
                 assistant.visibility.value
@@ -215,6 +223,7 @@ class SystemAssetRegistryService:
             ):
                 continue
             asset_id = f"assistant:{assistant.id}"
+            active_asset_ids.add(asset_id)
             existing = await self.repo.get_by_asset_id(asset_id)
             policy = self._merge_projection_policy(
                 existing=existing,
@@ -262,6 +271,10 @@ class SystemAssetRegistryService:
                     **policy,
                 },
             )
+        await self.repo.archive_registry_entity_assets_except(
+            registry_entity="assistant",
+            keep_asset_ids=active_asset_ids,
+        )
 
     @staticmethod
     def _merge_projection_policy(
@@ -272,7 +285,7 @@ class SystemAssetRegistryService:
         if existing is None:
             return defaults
         return {
-            "status": existing.status or defaults["status"],
+            "status": defaults["status"],
             "visibility_scope": existing.visibility_scope or defaults["visibility_scope"],
             "local_sync_policy": existing.local_sync_policy or defaults["local_sync_policy"],
             "execution_policy": existing.execution_policy or defaults["execution_policy"],

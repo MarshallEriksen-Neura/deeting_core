@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -51,6 +53,32 @@ class SystemAssetRepository(BaseRepository[SystemAsset]):
         stmt = stmt.order_by(SystemAsset.asset_id.asc()).limit(limit)
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
+
+    async def archive_registry_entity_assets_except(
+        self,
+        *,
+        registry_entity: str,
+        keep_asset_ids: Iterable[str],
+    ) -> int:
+        keep = set(keep_asset_ids)
+        result = await self.session.execute(
+            select(SystemAsset).where(SystemAsset.owner_scope == "system")
+        )
+        archived = 0
+        for asset in result.scalars().all():
+            metadata = asset.metadata_json if isinstance(asset.metadata_json, dict) else {}
+            if metadata.get("registry_entity") != registry_entity:
+                continue
+            if asset.asset_id in keep or asset.status == "archived":
+                continue
+            asset.status = "archived"
+            self.session.add(asset)
+            archived += 1
+
+        if archived:
+            await self.session.flush()
+
+        return archived
 
 
 __all__ = ["SystemAssetRepository"]

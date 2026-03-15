@@ -195,7 +195,7 @@ def seed_builtin_plugins_to_registry_task() -> dict[str, int]:
         return run_async(_run_seed_builtins())
     except Exception as exc:
         logger.exception("skill_registry_seed_builtins_failed: %s", exc)
-        return {"created": 0, "updated": 0}
+        return {"created": 0, "updated": 0, "disabled": 0}
 
 async def _run_seed_builtins() -> dict[str, int]:
     # Resolve project root relative to this file: backend/app/tasks/skill_registry.py
@@ -204,8 +204,10 @@ async def _run_seed_builtins() -> dict[str, int]:
     
     from app.models.skill_registry import SkillRegistry
     from importlib import import_module
+    from app.services.system_assets import SystemAssetRegistryService
 
-    stats = {"created": 0, "updated": 0}
+    stats = {"created": 0, "updated": 0, "disabled": 0}
+    seeded_builtin_ids: set[str] = set()
     
     async with AsyncSessionLocal() as session:
         repo = SkillRegistryRepository(session)
@@ -223,6 +225,7 @@ async def _run_seed_builtins() -> dict[str, int]:
                     
                     skill_id = manifest.get("id")
                     if not skill_id: continue
+                    seeded_builtin_ids.add(skill_id)
                     
                     # Read optional host contract (llm-tool.yaml) if it exists
                     llm_tool_path = skill_dir / "llm-tool.yaml"
@@ -294,6 +297,7 @@ async def _run_seed_builtins() -> dict[str, int]:
                     continue
 
                 try:
+                    seeded_builtin_ids.add(p_id)
                     # ... (rest of the legacy logic)
                     mod = import_module(module_path)
                     cls = getattr(mod, class_name)
@@ -336,6 +340,24 @@ async def _run_seed_builtins() -> dict[str, int]:
                     await _run_sync_skill(p_id)
                 except Exception as e:
                     logger.error(f"Failed to seed legacy plugin {p_id}: {e}")
+
+        result = await session.execute(
+            select(SkillRegistry).where(
+                SkillRegistry.runtime == "builtin",
+                SkillRegistry.source_repo.is_(None),
+            )
+        )
+        for skill in result.scalars().all():
+            if skill.id in seeded_builtin_ids:
+                continue
+            if skill.status != "disabled":
+                skill.status = "disabled"
+                session.add(skill)
+                stats["disabled"] += 1
+            await _run_remove_skill(skill.id)
+
+        await session.flush()
+        await SystemAssetRegistryService(session).sync_skill_registry_projections()
         
         await session.commit()
     return stats
