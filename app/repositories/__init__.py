@@ -44,7 +44,6 @@ from .trace_feedback_repository import TraceFeedbackRepository
 from .usage_repository import UsageRepository
 from .user_document_repository import UserDocumentRepository
 from .user_repository import UserRepository
-from .user_skill_installation_repository import UserSkillInstallationRepository
 
 __all__ = [
     "ApiKeyRepository",
@@ -88,7 +87,6 @@ __all__ = [
     "TraceFeedbackRepository",
     "UsageRepository",
     "UserDocumentRepository",
-    "UserSkillInstallationRepository",
     "UserRepository",
     "UserSecretaryRepository",
 ]

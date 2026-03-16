@@ -304,7 +304,7 @@ async def test_executor_logs_skip_when_no_dependencies_and_no_requirements(caplo
 
 
 @pytest.mark.asyncio
-async def test_executor_requires_user_id_for_repo_skill():
+async def test_executor_blocks_cloud_execution_for_repo_skill():
     manifest = {"usage_spec": {"example_code": "print('ok')"}}
     skill = type(
         "Skill",
@@ -322,7 +322,7 @@ async def test_executor_requires_user_id_for_repo_skill():
         sandbox_manager=_FakeSandboxManager(_FakeSandbox()),
     )
 
-    with pytest.raises(ValueError, match="authenticated user installation"):
+    with pytest.raises(ValueError, match="desktop app"):
         await executor.execute(
             "plugin.repo.skill",
             session_id="u1",
@@ -375,7 +375,7 @@ async def test_executor_surfaces_execution_error_from_sandbox():
 
 
 @pytest.mark.asyncio
-async def test_executor_reuses_repo_and_dependency_cache_within_same_sandbox():
+async def test_executor_reuses_repo_and_dependency_cache_within_same_sandbox_for_dry_run():
     manifest = {
         "usage_spec": {"example_code": "print('ok')"},
         "installation": {"dependencies": ["lxml"]},
@@ -403,7 +403,7 @@ async def test_executor_reuses_repo_and_dependency_cache_within_same_sandbox():
         session_id="u1",
         user_id="00000000-0000-0000-0000-000000000001",
         inputs={},
-        intent="edit",
+        intent="dry_run",
     )
     before_second = len(sandbox.commands.commands_ran)
 
@@ -412,7 +412,7 @@ async def test_executor_reuses_repo_and_dependency_cache_within_same_sandbox():
         session_id="u1",
         user_id="00000000-0000-0000-0000-000000000001",
         inputs={},
-        intent="edit",
+        intent="dry_run",
     )
     second_run_cmds = sandbox.commands.commands_ran[before_second:]
 
