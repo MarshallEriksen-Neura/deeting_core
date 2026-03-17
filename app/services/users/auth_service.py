@@ -21,6 +21,10 @@ from app.services.assistant.default_assistant_service import DefaultAssistantSer
 from app.services.providers.api_key import ApiKeyService
 from app.services.users.login_session_service import LoginSessionService
 from app.services.users.user_provisioning_service import UserProvisioningService
+from app.services.users.verification_email_sender import (
+    VerificationEmailDeliveryError,
+    VerificationEmailSender,
+)
 from app.utils.security import (
     create_access_token,
     create_refresh_token,
@@ -559,10 +563,31 @@ class AuthService:
             code_key, code, ttl=settings.VERIFICATION_CODE_TTL_SECONDS
         )  # 10 分钟有效
 
-        # TODO: 接入真实邮件服务；当前仅记录发送动作，不输出验证码
+        try:
+            await VerificationEmailSender().send_code(
+                email=email,
+                code=code,
+                purpose=purpose,
+            )
+        except VerificationEmailDeliveryError as exc:
+            await cache.delete(code_key)
+            logger.exception(
+                "verification_code_delivery_failed",
+                extra={"email": email, "purpose": purpose, "ip": client_ip},
+            )
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Verification email delivery failed",
+            ) from exc
+
         logger.info(
             "verification_code_sent",
-            extra={"email": email, "purpose": purpose, "ip": client_ip},
+            extra={
+                "email": email,
+                "purpose": purpose,
+                "ip": client_ip,
+                "provider": settings.AUTH_EMAIL_PROVIDER,
+            },
         )
 
         return code

@@ -604,7 +604,7 @@ async def client(setup_db) -> AsyncGenerator[AsyncClient, None]:
 async def admin_tokens(client: AsyncClient) -> dict:
     await client.post(
         "/api/v1/auth/login/code",
-        json={"email": "admin@example.com"},
+        json={"email": "admin@example.com", "captcha_token": "test-token"},
     )
     resp = await client.post(
         "/api/v1/auth/login",
@@ -622,7 +622,7 @@ async def admin_tokens(client: AsyncClient) -> dict:
 async def auth_tokens(client: AsyncClient) -> dict:
     await client.post(
         "/api/v1/auth/login/code",
-        json={"email": "testuser@example.com"},
+        json={"email": "testuser@example.com", "captcha_token": "test-token"},
     )
     resp = await client.post(
         "/api/v1/auth/login",
