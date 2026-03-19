@@ -333,10 +333,45 @@ class ImageGenerationService:
     async def list_outputs(self, task_id) -> list[ImageGenerationOutput]:
         return await self.output_repo.list_by_task(task_id)
 
+    async def ensure_outputs_have_assets(
+        self,
+        outputs: list[ImageGenerationOutput],
+        *,
+        uploader_user_id: Any | None = None,
+    ) -> list[ImageGenerationOutput]:
+        hydrated: list[ImageGenerationOutput] = []
+        for output in outputs:
+            if output.media_asset_id or not output.source_url:
+                hydrated.append(output)
+                continue
+            stored = await self._store_image_item(
+                {
+                    "url": output.source_url,
+                    "content_type": output.content_type or DEFAULT_IMAGE_CONTENT_TYPE,
+                },
+                uploader_user_id=uploader_user_id,
+            )
+            asset_id = stored.get("asset_id") if isinstance(stored, dict) else None
+            if not asset_id:
+                hydrated.append(output)
+                continue
+            refreshed = await self.output_repo.update_fields(
+                output.id,
+                {
+                    "media_asset_id": asset_id,
+                    "content_type": stored.get("content_type") or output.content_type,
+                    "size_bytes": stored.get("size_bytes") or output.size_bytes,
+                },
+                commit=True,
+            )
+            hydrated.append(refreshed or output)
+        return hydrated
+
     async def build_signed_outputs(
         self, task_id, base_url: str | None
     ) -> list[dict[str, Any]]:
         outputs = await self.output_repo.list_by_task(task_id)
+        outputs = await self.ensure_outputs_have_assets(outputs)
         result: list[dict[str, Any]] = []
         for output in outputs:
             asset_url = None
@@ -439,6 +474,7 @@ class ImageGenerationService:
             return {}
 
         outputs = await self.output_repo.list_by_task_ids(task_ids)
+        outputs = await self.ensure_outputs_have_assets(outputs)
         first_outputs: dict[UUID, ImageGenerationOutput] = {}
         for output in outputs:
             if output.task_id not in first_outputs:

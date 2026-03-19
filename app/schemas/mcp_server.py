@@ -3,7 +3,55 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
-McpServerType = Literal["sse", "stdio"]
+McpServerType = Literal["sse", "stdio", "streamable-http"]
+McpAvailabilityLane = Literal["callable_now", "installable", "advisory"]
+McpIndexStatus = Literal["indexed", "missing", "unknown"]
+
+
+def is_remote_server_type(server_type: str) -> bool:
+    return server_type in {"sse", "streamable-http"}
+
+
+def _tool_names(payloads: list[dict] | None) -> list[str]:
+    names: list[str] = []
+    for item in payloads or []:
+        name = str(item.get("name") or "").strip()
+        if name:
+            names.append(name)
+    return names
+
+
+def _enabled_tool_names(model: Any) -> set[str]:
+    disabled = set(model.disabled_tools or [])
+    return {name for name in _tool_names(model.tools_cache) if name not in disabled}
+
+
+def _derive_index_status(
+    expected_names: set[str],
+    indexed_tool_names: set[str] | None,
+) -> tuple[McpIndexStatus, str | None]:
+    if indexed_tool_names is None:
+        return "unknown", "index_unavailable"
+    if not expected_names:
+        return "unknown", None
+    if expected_names.issubset(indexed_tool_names):
+        return "indexed", None
+    return "missing", "index_missing"
+
+
+def _derive_server_recommended_action(
+    *,
+    model: Any,
+    runtime_ready: bool,
+    index_status: McpIndexStatus,
+) -> str | None:
+    if not is_remote_server_type(model.server_type):
+        return None
+    if not model.is_enabled:
+        return "enable_server"
+    if not runtime_ready or index_status == "missing":
+        return "sync_server"
+    return None
 
 
 class UserMcpServerBase(BaseModel):
@@ -16,7 +64,8 @@ class UserMcpServerBase(BaseModel):
     )
     is_enabled: bool = Field(True, description="Whether the server is enabled")
     server_type: McpServerType = Field(
-        "sse", description="Server type: sse (remote) or stdio (draft)"
+        "sse",
+        description="Server type: sse/streamable-http (remote) or stdio (draft)",
     )
     auth_type: str = Field("bearer", description="bearer, api_key, or none")
 
@@ -59,13 +108,64 @@ class UserMcpServerResponse(UserMcpServerBase):
     )
     tools_count: int = Field(0, description="Number of cached tools")
     status: str = Field("unknown", description="Sync status: active, error, unknown")
+    desired_enabled: bool = Field(True, description="Desired/config enabled state")
+    runtime_ready: bool = Field(False, description="Whether this server is runtime-ready")
+    runtime_status_reason: str | None = Field(
+        None, description="Reason when runtime is not ready"
+    )
+    availability_lane: McpAvailabilityLane = Field(
+        "advisory", description="Availability lane for UI consumption"
+    )
+    recommended_action: str | None = Field(
+        None, description="Suggested next UI action"
+    )
+    activation_required: bool = Field(
+        False, description="Whether activation is required before use"
+    )
+    install_required: bool = Field(
+        False, description="Whether installation/import is required before use"
+    )
+    index_status: McpIndexStatus = Field(
+        "unknown", description="Derived retrieval/index exposure status"
+    )
+    index_status_reason: str | None = Field(
+        None, description="Reason for current index status"
+    )
 
     model_config = ConfigDict(from_attributes=True)
 
     @staticmethod
-    def from_orm_model(model: Any) -> "UserMcpServerResponse":
-        # Helper to calculate tools count from the JSON list
+    def from_orm_model(
+        model: Any,
+        indexed_tool_names: set[str] | None = None,
+    ) -> "UserMcpServerResponse":
         count = len(model.tools_cache) if model.tools_cache else 0
+        enabled_tool_names = _enabled_tool_names(model) if model.is_enabled else set()
+        runtime_ready = bool(
+            is_remote_server_type(model.server_type) and model.is_enabled and count > 0
+        )
+        if model.server_type == "stdio":
+            runtime_status_reason = "draft_config"
+        elif not model.is_enabled:
+            runtime_status_reason = "disabled"
+        elif count == 0:
+            runtime_status_reason = "no_cached_tools"
+        else:
+            runtime_status_reason = None
+        availability_lane: McpAvailabilityLane = (
+            "callable_now"
+            if runtime_ready
+            else ("installable" if model.server_type == "stdio" else "advisory")
+        )
+        index_status, index_status_reason = _derive_index_status(
+            enabled_tool_names,
+            indexed_tool_names,
+        )
+        recommended_action = _derive_server_recommended_action(
+            model=model,
+            runtime_ready=runtime_ready,
+            index_status=index_status,
+        )
         return UserMcpServerResponse(
             id=model.id,
             user_id=model.user_id,
@@ -81,12 +181,22 @@ class UserMcpServerResponse(UserMcpServerBase):
             updated_at=model.updated_at,
             secret_ref_id=model.secret_ref_id,
             tools_count=count,
-            # Simple heuristic for status
             status=(
                 "draft"
                 if model.server_type == "stdio"
                 else ("active" if model.is_enabled and count > 0 else "inactive")
             ),
+            desired_enabled=model.is_enabled,
+            runtime_ready=runtime_ready,
+            runtime_status_reason=runtime_status_reason,
+            availability_lane=availability_lane,
+            recommended_action=recommended_action,
+            activation_required=bool(
+                is_remote_server_type(model.server_type) and not model.is_enabled
+            ),
+            install_required=bool(model.server_type == "stdio"),
+            index_status=index_status,
+            index_status_reason=index_status_reason,
         )
 
 
@@ -97,6 +207,92 @@ class McpServerToolItem(BaseModel):
         default_factory=dict, description="JSON Schema for tool arguments"
     )
     enabled: bool = Field(True, description="Whether this tool is enabled")
+    desired_enabled: bool = Field(True, description="Desired/config enabled state")
+    runtime_ready: bool = Field(False, description="Whether this tool is runtime-ready")
+    runtime_status_reason: str | None = Field(
+        None, description="Reason when runtime is not ready"
+    )
+    availability_lane: McpAvailabilityLane = Field(
+        "advisory", description="Availability lane for UI consumption"
+    )
+    recommended_action: str | None = Field(
+        None, description="Suggested next UI action"
+    )
+    activation_required: bool = Field(
+        False, description="Whether activation is required before use"
+    )
+    install_required: bool = Field(
+        False, description="Whether installation/import is required before use"
+    )
+    index_status: McpIndexStatus = Field(
+        "unknown", description="Derived retrieval/index exposure status"
+    )
+    index_status_reason: str | None = Field(
+        None, description="Reason for current index status"
+    )
+
+    @staticmethod
+    def from_cached_tool(
+        *,
+        server_model: Any,
+        tool_payload: dict[str, Any],
+        indexed_tool_names: set[str] | None = None,
+    ) -> "McpServerToolItem":
+        name = str(tool_payload.get("name") or "").strip()
+        disabled = set(server_model.disabled_tools or [])
+        enabled = name not in disabled
+        runtime_ready = bool(
+            name
+            and enabled
+            and is_remote_server_type(server_model.server_type)
+            and server_model.is_enabled
+        )
+        if server_model.server_type == "stdio":
+            runtime_status_reason = "draft_config"
+        elif not enabled:
+            runtime_status_reason = "tool_disabled"
+        elif not server_model.is_enabled:
+            runtime_status_reason = "server_disabled"
+        else:
+            runtime_status_reason = None
+        availability_lane: McpAvailabilityLane = (
+            "callable_now"
+            if runtime_ready
+            else (
+                "installable"
+                if server_model.server_type == "stdio"
+                else "advisory"
+            )
+        )
+        index_status, index_status_reason = _derive_index_status(
+            {name} if enabled and server_model.is_enabled and name else set(),
+            indexed_tool_names,
+        )
+        return McpServerToolItem(
+            name=name,
+            description=tool_payload.get("description"),
+            input_schema=tool_payload.get("input_schema") or {},
+            enabled=enabled,
+            desired_enabled=enabled,
+            runtime_ready=runtime_ready,
+            runtime_status_reason=runtime_status_reason,
+            availability_lane=availability_lane,
+            recommended_action=(
+                "wait_for_runtime"
+                if enabled
+                and is_remote_server_type(server_model.server_type)
+                and not server_model.is_enabled
+                else None
+            ),
+            activation_required=bool(
+                enabled
+                and is_remote_server_type(server_model.server_type)
+                and not server_model.is_enabled
+            ),
+            install_required=bool(server_model.server_type == "stdio"),
+            index_status=index_status,
+            index_status_reason=index_status_reason,
+        )
 
 
 class McpServerToolToggleRequest(BaseModel):

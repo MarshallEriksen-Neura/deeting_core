@@ -66,16 +66,20 @@ class Settings(BaseSettings):
     QDRANT_URL: str | None = None
     QDRANT_API_KEY: str | None = None
     QDRANT_TIMEOUT_SECONDS: float = 10.0
-    QDRANT_KB_SYSTEM_COLLECTION: str = "kb_system"
-    QDRANT_KB_CANDIDATES_COLLECTION: str = "kb_candidates"
-    QDRANT_KB_USER_COLLECTION: str = "kb_user"
+    QDRANT_KB_SYSTEM_COLLECTION: str = "system_memory"
+    QDRANT_KB_CANDIDATES_COLLECTION: str = "infra_candidates"
+    QDRANT_KB_USER_COLLECTION: str = "user_memory"
     QDRANT_KB_USER_SHARED_COLLECTION: str = "kb_shared_v1"
     QDRANT_KB_USER_COLLECTION_STRATEGY: str = (
         "per_user"  # shared | per_user | sharded_by_model
     )
     QDRANT_KB_USER_COLLECTION_SHARDS: int = 16
-    QDRANT_TOOL_SYSTEM_COLLECTION: str = "sys_tool_index"
-    QDRANT_TOOL_USER_COLLECTION_PREFIX: str = "kb_user"
+    QDRANT_TOOL_SYSTEM_COLLECTION: str = "system_capability_tools"
+    QDRANT_TOOL_USER_COLLECTION_PREFIX: str = "user_capability"
+    QDRANT_SKILL_COLLECTION: str = "system_capability_skills"
+    QDRANT_ASSISTANT_COLLECTION: str = "system_capability_assistants"
+    QDRANT_MARKETPLACE_COLLECTION: str = "system_capability_marketplace"
+    QDRANT_SEMANTIC_CACHE_COLLECTION: str = "infra_semantic_cache"
     EMBEDDING_VECTOR_SIZE: int | None = None
     KB_GLOBAL_EMBEDDING_LOGICAL_MODEL: str | None = None
     EMBEDDING_MODELS_REQUIRE_INPUT_TYPE: str = (

@@ -42,6 +42,20 @@ class FakeManifestGenerator:
         }
 
 
+class FakeSecurityReviewService:
+    async def review_repo(self, *_args, **_kwargs):
+        return {
+            "decision": "needs_admin_review",
+            "risk_level": "high",
+            "summary": "reads env and performs network calls",
+            "findings": [{"severity": "high", "category": "privacy_risks"}],
+            "network_targets": ["https://api.example.com"],
+            "destructive_actions": [],
+            "privacy_risks": ["main.py"],
+            "requires_admin_review": True,
+        }
+
+
 @pytest.mark.asyncio
 async def test_repo_ingestion_passes_user_id_to_manifest_generator(monkeypatch, tmp_path):
     (tmp_path / "requirements.txt").write_text("lxml", encoding="utf-8")
@@ -116,6 +130,47 @@ async def test_repo_ingestion_flow(monkeypatch, tmp_path):
     )
 
     assert result["skill_id"] == "docx_skill"
+
+
+@pytest.mark.asyncio
+async def test_repo_ingestion_persists_security_review_for_plugin_market(monkeypatch, tmp_path):
+    (tmp_path / "requirements.txt").write_text("lxml", encoding="utf-8")
+    (tmp_path / "README.md").write_text("docx", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "app.services.skill_registry.repo_ingestion_service.clone_repo",
+        lambda *_args, **_kwargs: (tmp_path, tmp_path),
+    )
+
+    service = RepoIngestionService(
+        repo=FakeRepo(),
+        manifest_generator=FakeManifestGenerator(),
+        parsers=[PythonRepoParser(), NodeRepoParser()],
+        security_review_service=FakeSecurityReviewService(),
+    )
+
+    result = await service.ingest_repo(
+        "https://example.com/repo.git",
+        "main",
+        skill_id="docx_skill",
+        runtime_hint="python_library",
+        submission_channel="plugin_market",
+        user_id="123e4567-e89b-12d3-a456-426614174000",
+    )
+
+    saved = await service.repo.get_by_id("docx_skill")
+
+    assert result["review_required"] is True
+    assert result["security_review_decision"] == "needs_admin_review"
+    assert saved is not None
+    assert saved.status == "needs_review"
+    assert saved.risk_level == "high"
+    assert saved.manifest_json["deeting_ingestion"]["requires_admin_approval"] is True
+    assert (
+        saved.manifest_json["deeting_ingestion"]["submitter_user_id"]
+        == "123e4567-e89b-12d3-a456-426614174000"
+    )
+    assert saved.manifest_json["deeting_ingestion"]["security_review"]["decision"] == "needs_admin_review"
 
 
 @pytest.mark.asyncio

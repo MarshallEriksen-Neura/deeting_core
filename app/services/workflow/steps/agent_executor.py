@@ -735,7 +735,7 @@ class AgentExecutorStep(BaseStep):
         stmt = select(UserMcpServer).where(
             UserMcpServer.user_id == user_id,
             UserMcpServer.is_enabled == True,
-            UserMcpServer.server_type == "sse",
+            UserMcpServer.server_type.in_(["sse", "streamable-http"]),
         )
         res = await ctx.db_session.execute(stmt)
         servers = res.scalars().all()
@@ -758,7 +758,8 @@ class AgentExecutorStep(BaseStep):
                     tool_map[name] = {
                         "sse_url": server.sse_url,
                         "headers": headers,
-                        "server_name": server.name
+                        "server_name": server.name,
+                        "transport_type": server.server_type,
                     }
 
         return tool_map
@@ -1023,6 +1024,7 @@ class AgentExecutorStep(BaseStep):
                     tool_name,
                     tool_call.arguments,
                     headers=mcp_info["headers"],
+                    transport_type=mcp_info["transport_type"],
                 )
                 return result
             except Exception as e:

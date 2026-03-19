@@ -220,7 +220,7 @@ class TenantQuotaUpdateRequest(BaseSchema):
 
 
 class TenantQuotaAdjustRequest(BaseSchema):
-    amount: float = Field(..., description="正数充值，负数扣减")
+    amount: float = Field(..., description="正数充值, 负数扣减")
     reason: str | None = None
 
 
@@ -339,3 +339,46 @@ class PluginReloadResponse(BaseSchema):
     ok: bool
     plugin_id: str
     message: str
+
+
+class PluginMarketReviewFinding(BaseSchema):
+    severity: str | None = None
+    category: str | None = None
+    message: str | None = None
+    file: str | None = None
+
+
+class PluginMarketReviewAdminItem(BaseSchema):
+    id: str
+    name: str
+    status: str
+    runtime: str | None = None
+    version: str | None = None
+    description: str | None = None
+    source_repo: str | None = None
+    source_revision: str | None = None
+    source_subdir: str | None = None
+    risk_level: str | None = None
+    submission_channel: str | None = None
+    requires_admin_approval: bool = False
+    submitter_user_id: str | None = None
+    reviewer_user_id: str | None = None
+    reviewed_at: datetime | None = None
+    review_reason: str | None = None
+    security_review_decision: str | None = None
+    security_review_summary: str | None = None
+    network_targets: list[str] = Field(default_factory=list)
+    destructive_actions: list[str] = Field(default_factory=list)
+    privacy_risks: list[str] = Field(default_factory=list)
+    findings: list[PluginMarketReviewFinding] = Field(default_factory=list)
+    manifest_json: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+    updated_at: datetime
+
+
+class PluginMarketReviewAdminListResponse(OffsetPageMeta):
+    items: list[PluginMarketReviewAdminItem]
+
+
+class PluginMarketReviewDecisionRequest(BaseSchema):
+    reason: str | None = None

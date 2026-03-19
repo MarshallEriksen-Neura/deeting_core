@@ -114,3 +114,15 @@ class AssistantListResponse(BaseSchema):
     items: list[AssistantDTO]
     next_cursor: str | None = Field(None, description="下页游标，若为空则无更多数据")
     size: int = Field(..., description="本页返回数量")
+
+
+class AssistantDesktopIngestRequest(BaseSchema):
+    source_url: str = Field(..., description="来源 URL")
+    content_excerpt: str = Field(..., description="桌面抓取后的内容摘要")
+    instruction: str | None = Field(None, description="额外提取指令")
+
+
+class AssistantDesktopIngestResponse(BaseSchema):
+    action: str = Field(..., description="处理动作")
+    id: UUID = Field(..., description="创建后的助手 ID")
+    name: str = Field(..., description="助手名称")

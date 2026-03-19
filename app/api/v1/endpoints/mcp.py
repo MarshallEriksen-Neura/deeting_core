@@ -21,6 +21,7 @@ from app.schemas.mcp_server import (
     UserMcpServerCreate,
     UserMcpServerResponse,
     UserMcpServerUpdate,
+    is_remote_server_type,
 )
 from app.schemas.mcp_source import (
     McpSourceSyncRequest,
@@ -89,6 +90,15 @@ async def _fetch_mcp_source_payload(
     return data
 
 
+async def _load_indexed_tool_names_by_origin(user_id: uuid.UUID) -> dict[str, set[str]]:
+    try:
+        return await tool_sync_service.list_user_indexed_tool_names_by_origin(
+            user_id=user_id
+        )
+    except Exception:
+        return {}
+
+
 @router.get("/servers", response_model=list[UserMcpServerResponse])
 async def list_mcp_servers(
     current_user: User = Depends(get_current_active_user),
@@ -100,7 +110,14 @@ async def list_mcp_servers(
     stmt = select(UserMcpServer).where(UserMcpServer.user_id == current_user.id)
     result = await session.execute(stmt)
     servers = result.scalars().all()
-    return [UserMcpServerResponse.from_orm_model(s) for s in servers]
+    indexed_by_origin = await _load_indexed_tool_names_by_origin(current_user.id)
+    return [
+        UserMcpServerResponse.from_orm_model(
+            s,
+            indexed_tool_names=indexed_by_origin.get(str(s.id)),
+        )
+        for s in servers
+    ]
 
 
 @router.post("/servers", response_model=UserMcpServerResponse)
@@ -116,7 +133,7 @@ async def create_mcp_server(
     """
     server_type = server_in.server_type or "sse"
     sse_url = str(server_in.sse_url) if server_in.sse_url else None
-    if server_type == "sse" and not sse_url:
+    if is_remote_server_type(server_type) and not sse_url:
         raise HTTPException(
             status_code=400, detail="sse_url is required for remote MCP servers"
         )
@@ -135,7 +152,7 @@ async def create_mcp_server(
         secret_ref_id = secret_key
 
     # 2. Create DB Record
-    is_enabled = server_in.is_enabled if server_type == "sse" else False
+    is_enabled = server_in.is_enabled if is_remote_server_type(server_type) else False
     draft_config = (
         _sanitize_draft_config(server_in.draft_config)
         if server_type == "stdio"
@@ -146,7 +163,7 @@ async def create_mcp_server(
         user_id=current_user.id,
         name=server_in.name,
         description=server_in.description,
-        sse_url=sse_url if server_type == "sse" else None,
+        sse_url=sse_url if is_remote_server_type(server_type) else None,
         server_type=server_type,
         auth_type=server_in.auth_type,
         secret_ref_id=secret_ref_id,
@@ -160,7 +177,7 @@ async def create_mcp_server(
     await session.refresh(new_server)
 
     # 3. Trigger initial sync (remote servers only)
-    if server_type == "sse" and sse_url:
+    if is_remote_server_type(server_type) and sse_url:
         # We run it inline for "Connect" action so user sees results immediately (or error).
         try:
             await mcp_discovery_service.sync_user_tools(session, current_user.id)
@@ -211,7 +228,7 @@ async def update_mcp_server(
     if server.server_type == "stdio":
         server.is_enabled = False
         server.sse_url = None
-    elif server.server_type == "sse" and not server.sse_url:
+    elif is_remote_server_type(server.server_type) and not server.sse_url:
         raise HTTPException(
             status_code=400, detail="sse_url is required for remote MCP servers"
         )
@@ -241,7 +258,11 @@ async def update_mcp_server(
     await session.refresh(server)
 
     try:
-        if server.server_type == "sse" and server.sse_url and server.is_enabled:
+        if (
+            is_remote_server_type(server.server_type)
+            and server.sse_url
+            and server.is_enabled
+        ):
             await mcp_discovery_service.sync_user_tools(session, current_user.id)
             await session.refresh(server)
         else:
@@ -273,9 +294,9 @@ async def sync_mcp_server(
 
     if not server:
         raise HTTPException(status_code=404, detail="MCP server not found")
-    if server.server_type != "sse" or not server.sse_url:
+    if not is_remote_server_type(server.server_type) or not server.sse_url:
         raise HTTPException(
-            status_code=400, detail="MCP server is not a remote SSE server"
+            status_code=400, detail="MCP server is not a remote server"
         )
 
     # We reuse the bulk sync service but it filters by user.
@@ -363,7 +384,7 @@ async def sync_mcp_source(
 
             url = config.get("url")
             server_type = "sse" if isinstance(url, str) and url else "stdio"
-            sse_url = str(url) if server_type == "sse" else None
+            sse_url = str(url) if is_remote_server_type(server_type) else None
             name = config.get("name") if isinstance(config.get("name"), str) else key
             description = (
                 config.get("description")
@@ -386,7 +407,7 @@ async def sync_mcp_source(
                 server.name = name
                 server.description = description
                 server.server_type = server_type
-                server.sse_url = sse_url if server_type == "sse" else None
+                server.sse_url = sse_url if is_remote_server_type(server_type) else None
                 if server_type == "stdio":
                     server.is_enabled = False
                 server.draft_config = draft_config
@@ -398,11 +419,11 @@ async def sync_mcp_source(
                     source_key=key,
                     name=name,
                     description=description,
-                    sse_url=sse_url if server_type == "sse" else None,
+                    sse_url=sse_url if is_remote_server_type(server_type) else None,
                     server_type=server_type,
                     auth_type="none",
                     secret_ref_id=None,
-                    is_enabled=True if server_type == "sse" else False,
+                    is_enabled=True if is_remote_server_type(server_type) else False,
                     tools_cache=[],
                     draft_config=draft_config,
                 )
@@ -488,17 +509,18 @@ async def list_mcp_server_tools(
         raise HTTPException(status_code=404, detail="MCP server not found")
 
     disabled = set(server.disabled_tools or [])
+    indexed_by_origin = await _load_indexed_tool_names_by_origin(current_user.id)
+    indexed_tool_names = indexed_by_origin.get(str(server.id))
     tools = []
     for tool in server.tools_cache or []:
         name = tool.get("name")
         if not name:
             continue
         tools.append(
-            McpServerToolItem(
-                name=name,
-                description=tool.get("description"),
-                input_schema=tool.get("input_schema") or {},
-                enabled=name not in disabled,
+            McpServerToolItem.from_cached_tool(
+                server_model=server,
+                tool_payload=tool,
+                indexed_tool_names=indexed_tool_names,
             )
         )
     return tools
@@ -522,9 +544,9 @@ async def toggle_mcp_server_tool(
     server = result.scalar_one_or_none()
     if not server:
         raise HTTPException(status_code=404, detail="MCP server not found")
-    if server.server_type != "sse":
+    if not is_remote_server_type(server.server_type):
         raise HTTPException(
-            status_code=400, detail="MCP server is not a remote SSE server"
+            status_code=400, detail="MCP server is not a remote server"
         )
 
     tool = next(
@@ -561,11 +583,11 @@ async def toggle_mcp_server_tool(
     except Exception:
         pass
 
-    return McpServerToolItem(
-        name=tool_name,
-        description=tool.get("description"),
-        input_schema=tool.get("input_schema") or {},
-        enabled=tool_name not in disabled_tools,
+    indexed_by_origin = await _load_indexed_tool_names_by_origin(current_user.id)
+    return McpServerToolItem.from_cached_tool(
+        server_model=server,
+        tool_payload=tool,
+        indexed_tool_names=indexed_by_origin.get(str(server.id)),
     )
 
 
@@ -582,9 +604,9 @@ async def test_mcp_tool(
     server = result.scalar_one_or_none()
     if not server:
         raise HTTPException(status_code=404, detail="MCP server not found")
-    if server.server_type != "sse" or not server.sse_url:
+    if not is_remote_server_type(server.server_type) or not server.sse_url:
         raise HTTPException(
-            status_code=400, detail="MCP server is not a remote SSE server"
+            status_code=400, detail="MCP server is not a remote server"
         )
 
     tool = next(
@@ -611,6 +633,7 @@ async def test_mcp_tool(
             payload.tool_name,
             payload.arguments or {},
             headers=headers,
+            transport_type=server.server_type,
         )
         logs.append(f"trace={trace_id} success")
         return McpToolTestResponse(

@@ -90,6 +90,7 @@ from .spec_agent import SpecExecutionLog, SpecPlan, SpecWorkerSession
 from .spec_knowledge import SpecKnowledgeCandidate
 from .trace_feedback import TraceFeedback
 from .system_setting import SystemSetting
+from .system_asset import SystemAsset
 from .upstream_secret import UpstreamSecret
 from .user import Permission, Role, RolePermission, User, UserRole
 from .user_mcp_server import UserMcpServer
@@ -148,6 +149,7 @@ __all__ = [
     "CodeModeExecution",
     "UserSecretary",
     "SystemSetting",
+    "SystemAsset",
     "User",
     "Role",
     "Permission",

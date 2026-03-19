@@ -28,8 +28,10 @@ class PluginMarketSkillItem(TimestampSchema):
     version: str | None = None
     source_repo: str | None = None
     source_revision: str | None = None
+    source_kind: str = "community"
     status: str
     installed: bool = False
+    compatibility: dict | None = None
 
 
 class PluginInstallRequest(BaseSchema):

@@ -145,22 +145,24 @@ def register_routes(app: FastAPI) -> None:
         admin_assistants_router,
         admin_billing_router,
         admin_conversations_router,
+        admin_dashboard_router,
         admin_gateway_logs_router,
         admin_generation_tasks_router,
         admin_knowledge_router,
         admin_memory_router,
         admin_notification_router,
+        admin_plugin_market_reviews_router,
         admin_plugins_router,
         admin_provider_credential_router,
         admin_provider_instance_router,
         admin_provider_preset_router,
         admin_registration_router,
+        admin_routing_mab_router,
         admin_settings_router,
         admin_skill_registry_router,
-        admin_spec_plans_router,
         admin_spec_knowledge_reviews_router,
+        admin_spec_plans_router,
         admin_users_router,
-        admin_routing_mab_router,
         assistants_router,
         auth_router,
         available_models_router,
@@ -168,7 +170,6 @@ def register_routes(app: FastAPI) -> None:
         dashboard_router,
         feedback_router,
         gateway_logs_router,
-        login_sessions_router,
         internal_bridge_router,
         internal_code_mode_router,
         internal_conversation_router,
@@ -178,12 +179,13 @@ def register_routes(app: FastAPI) -> None:
         internal_skill_execution_router,
         internal_video_generation_router,
         knowledge_router,
+        login_sessions_router,
         mcp_router,
         media_router,
         memory_router,
         monitor_router,
-        notification_channel_router,
         monitoring_router,
+        notification_channel_router,
         notification_router,
         notification_ws_router,
         plugin_market_router,
@@ -191,6 +193,7 @@ def register_routes(app: FastAPI) -> None:
         public_image_share_router,
         settings_router,
         spec_agent_router,
+        system_assets_router,
         user_api_keys_router,
         user_documents_router,
         user_mcp_router,
@@ -217,6 +220,11 @@ def register_routes(app: FastAPI) -> None:
         admin_assistant_reviews_router,
         prefix=api_prefix,
         tags=["Admin - Assistant Reviews"],
+    )
+    app.include_router(
+        admin_dashboard_router,
+        prefix=api_prefix,
+        tags=["Admin - Dashboard"],
     )
     app.include_router(
         admin_spec_knowledge_reviews_router,
@@ -293,6 +301,11 @@ def register_routes(app: FastAPI) -> None:
         tags=["Admin - System Memory"],
     )
     app.include_router(
+        admin_plugin_market_reviews_router,
+        prefix=api_prefix,
+        tags=["Admin - Plugin Reviews"],
+    )
+    app.include_router(
         admin_plugins_router,
         prefix=api_prefix,
         tags=["Admin - Plugins"],
@@ -352,6 +365,7 @@ def register_routes(app: FastAPI) -> None:
     app.include_router(credits_router, prefix=api_prefix, tags=["Credits"])
     app.include_router(spec_agent_router, prefix=api_prefix, tags=["Spec Agent"])
     app.include_router(plugin_market_router, prefix=api_prefix, tags=["Plugin Market"])
+    app.include_router(system_assets_router, prefix=api_prefix, tags=["System Assets"])
     app.include_router(mcp_router, prefix=api_prefix, tags=["MCP Market"])
     app.include_router(
         user_mcp_router, prefix=f"{api_prefix}/mcp", tags=["User MCP Servers"]

@@ -147,3 +147,41 @@ async def test_transform_prefers_protocol_profile_decoder():
     transformed = ctx.get("response_transform", "response")
     assert transformed["choices"][0]["message"]["content"] == "hello from responses"
     assert transformed["usage"]["total_tokens"] == 5
+
+
+@pytest.mark.asyncio
+async def test_transform_embedding_response_passthrough_and_usage():
+    step = ResponseTransformStep()
+    ctx = WorkflowContext(
+        channel=Channel.INTERNAL,
+        capability="embedding",
+        requested_model="text-embedding-3-small",
+    )
+
+    embedding_response = {
+        "object": "list",
+        "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}],
+        "model": "text-embedding-3-small",
+        "usage": {"prompt_tokens": 8, "total_tokens": 8},
+    }
+
+    ctx.set("upstream_call", "response", embedding_response)
+    ctx.set("upstream_call", "status_code", 200)
+    ctx.set("routing", "provider", "openai")
+    ctx.set("routing", "protocol_profile", {"response": {"decoder": {"name": "openai_chat"}}})
+
+    result = await step.execute(ctx)
+
+    assert result.status == StepStatus.SUCCESS
+    transformed = ctx.get("response_transform", "response")
+    assert transformed["data"][0]["embedding"] == [0.1, 0.2]
+    assert transformed["model"] == "text-embedding-3-small"
+    assert transformed["trace_id"] == ctx.trace_id
+    assert ctx.get("response_transform", "usage") == {
+        "prompt_tokens": 8,
+        "completion_tokens": 0,
+        "total_tokens": 8,
+    }
+    assert ctx.billing.input_tokens == 8
+    assert ctx.billing.output_tokens == 0
+    assert ctx.billing.total_tokens == 8

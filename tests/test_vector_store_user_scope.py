@@ -450,6 +450,73 @@ async def test_delete_prefers_embedding_vector_size_resolver():
 
 
 @pytest.mark.asyncio
+async def test_get_point_uses_exact_has_id_filter_with_user_scope():
+    user_id = uuid.uuid4()
+    collection_name = get_kb_user_collection_name(user_id, embedding_model="test-embed")
+    scroll_bodies: list[dict] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == f"/collections/{collection_name}" and request.method == "GET":
+            return httpx.Response(
+                200,
+                json={
+                    "result": {
+                        "config": {"params": {"vectors": {"text": {"size": 2}}}}
+                    }
+                },
+            )
+        if path == f"/collections/{collection_name}/points/scroll":
+            scroll_bodies.append(json.loads(request.content.decode()))
+            return httpx.Response(
+                200,
+                json={
+                    "result": {
+                        "points": [
+                            {
+                                "id": "pid-2",
+                                "payload": {
+                                    "content": "hello",
+                                    "user_id": str(user_id),
+                                    "embedding_model": "test-embed",
+                                },
+                            }
+                        ],
+                        "next_page_offset": None,
+                    }
+                },
+            )
+        return httpx.Response(404)
+
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="http://qdrant.test"
+    )
+    vs_client = QdrantUserVectorService(
+        client=client,
+        user_id=user_id,
+        embedding_model="test-embed",
+        fail_open=False,
+        embedding_service=FakeEmbeddingService(dim=2),  # type: ignore[arg-type]
+    )
+
+    result = await vs_client.get_point("pid-2")
+    await client.aclose()
+
+    assert result == {
+        "id": "pid-2",
+        "content": "hello",
+        "payload": {
+            "content": "hello",
+            "user_id": str(user_id),
+            "embedding_model": "test-embed",
+        },
+    }
+    must_filters = ((scroll_bodies[0].get("filter") or {}).get("must") or [])
+    assert {"has_id": ["pid-2"]} in must_filters
+    assert {"key": "user_id", "match": {"value": str(user_id)}} in must_filters
+
+
+@pytest.mark.asyncio
 async def test_delete_raises_when_vector_size_unavailable_and_no_fallback():
     user_id = uuid.uuid4()
     client = httpx.AsyncClient(

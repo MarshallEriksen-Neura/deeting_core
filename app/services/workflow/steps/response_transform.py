@@ -49,6 +49,7 @@ class ResponseTransformStep(BaseStep):
         """执行响应转换"""
         upstream_response = ctx.get("upstream_call", "response")
         status_code = ctx.get("upstream_call", "status_code")
+        capability = (ctx.capability or "chat").lower()
         provider = ctx.get("routing", "provider")
         protocol_profile = ctx.get("routing", "protocol_profile") or {}
         request_profile = (
@@ -87,28 +88,33 @@ class ResponseTransformStep(BaseStep):
             )
 
         try:
-            decoder_name = (
-                ((protocol_profile.get("response") or {}).get("decoder") or {}).get("name")
-                if isinstance(protocol_profile, dict)
-                else None
-            )
-            if isinstance(decoder_name, str) and decoder_name.strip():
-                canonical = decode_response(
-                    decoder_name,
-                    upstream_response if isinstance(upstream_response, dict) else {},
-                    fallback_model=ctx.requested_model,
+            if capability == "embedding":
+                transformed = (
+                    dict(upstream_response) if isinstance(upstream_response, dict) else {}
                 )
-                transformed = render_chat_completion_response(canonical)
             else:
-                item_config = SimpleNamespace(
-                    template_engine=template_engine,
-                    response_transform=response_transform,
+                decoder_name = (
+                    ((protocol_profile.get("response") or {}).get("decoder") or {}).get("name")
+                    if isinstance(protocol_profile, dict)
+                    else None
                 )
-                transformed = response_transformer.transform(
-                    item_config=item_config,
-                    raw_response=upstream_response,
-                    status_code=status_code or 200,
-                )
+                if isinstance(decoder_name, str) and decoder_name.strip():
+                    canonical = decode_response(
+                        decoder_name,
+                        upstream_response if isinstance(upstream_response, dict) else {},
+                        fallback_model=ctx.requested_model,
+                    )
+                    transformed = render_chat_completion_response(canonical)
+                else:
+                    item_config = SimpleNamespace(
+                        template_engine=template_engine,
+                        response_transform=response_transform,
+                    )
+                    transformed = response_transformer.transform(
+                        item_config=item_config,
+                        raw_response=upstream_response,
+                        status_code=status_code or 200,
+                    )
 
             # 提取 usage 信息
             usage = self._extract_usage(transformed)

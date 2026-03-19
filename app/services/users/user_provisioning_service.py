@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from fastapi import HTTPException, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -177,6 +178,51 @@ class UserProvisioningService:
             logger.info(
                 "identity_linked", extra={"user_id": str(user_id), "provider": provider}
             )
+
+    async def bind_identity_to_user(
+        self,
+        *,
+        user: User,
+        provider: str,
+        external_id: str,
+        display_name: str | None = None,
+        avatar: str | None = None,
+    ) -> tuple[Identity | None, bool]:
+        existing = await self.user_repo.get_identity(provider, external_id)
+        if existing:
+            if existing.user_id != user.id:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"{provider} identity already bound to another account",
+                )
+            return existing, False
+
+        identity = Identity(
+            user_id=user.id,
+            provider=provider,
+            external_id=external_id,
+            display_name=display_name,
+        )
+        self.db.add(identity)
+        avatar_object_key = self._normalize_avatar_object_key(avatar)
+        if avatar_object_key and not (user.avatar_object_key or "").strip():
+            user.avatar_object_key = avatar_object_key
+            user.avatar_storage_type = "public"
+        try:
+            await self.db.commit()
+        except IntegrityError as exc:
+            await self.db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"{provider} identity already bound to another account",
+            ) from exc
+        await self.db.refresh(user)
+        await self.db.refresh(identity)
+        logger.info(
+            "identity_bound_explicitly",
+            extra={"user_id": str(user.id), "provider": provider},
+        )
+        return identity, True
 
     @staticmethod
     def _normalize_avatar_object_key(avatar: str | None) -> str | None:

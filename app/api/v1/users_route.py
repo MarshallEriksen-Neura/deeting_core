@@ -13,7 +13,7 @@
 - 禁止在路由中直接操作 ORM/Session
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -22,9 +22,16 @@ from app.models import User
 from app.repositories import ProviderModelRepository, UserSecretaryRepository
 from app.schemas.auth import MessageResponse
 from app.schemas.secretary import UserSecretaryDTO, UserSecretaryUpdateRequest
-from app.schemas.user import UserRead, UserUpdate, UserWithPermissions
+from app.schemas.user import (
+    EmailBindingConfirmRequest,
+    EmailBindingSendCodeRequest,
+    UserBindingsRead,
+    UserRead,
+    UserUpdate,
+    UserWithPermissions,
+)
 from app.services.secretary.secretary_service import UserSecretaryService
-from app.services.users import UserService
+from app.services.users import AccountBindingService, UserService
 
 router = APIRouter(prefix="/users", tags=["Users"])
 
@@ -34,6 +41,12 @@ def get_secretary_service(db: AsyncSession = Depends(get_db)) -> UserSecretarySe
         UserSecretaryRepository(db),
         ProviderModelRepository(db),
     )
+
+
+def get_account_binding_service(
+    db: AsyncSession = Depends(get_db),
+) -> AccountBindingService:
+    return AccountBindingService(db)
 
 
 @router.post("/reset-password", response_model=MessageResponse, include_in_schema=False)
@@ -100,6 +113,55 @@ async def update_current_user(
     """
     service = UserService(db)
     return await service.update_profile(user, request)
+
+
+@router.get("/me/bindings", response_model=UserBindingsRead)
+async def get_my_bindings(
+    user: User = Depends(get_current_active_user),
+    service: AccountBindingService = Depends(get_account_binding_service),
+) -> UserBindingsRead:
+    return await service.list_user_bindings(user)
+
+
+@router.post("/me/bindings/email/send-code", response_model=MessageResponse)
+async def send_email_binding_code(
+    payload: EmailBindingSendCodeRequest,
+    raw_request: Request,
+    user: User = Depends(get_current_active_user),
+    service: AccountBindingService = Depends(get_account_binding_service),
+) -> MessageResponse:
+    client_ip = raw_request.headers.get("x-forwarded-for", "")
+    if client_ip:
+        client_ip = client_ip.split(",")[0].strip() or None
+    else:
+        client_ip = raw_request.client.host if raw_request.client else None
+    await service.send_email_bind_code(
+        user=user,
+        email=payload.email,
+        client_ip=client_ip,
+    )
+    return MessageResponse(message="Verification code sent")
+
+
+@router.post("/me/bindings/email/confirm", response_model=MessageResponse)
+async def confirm_email_binding(
+    payload: EmailBindingConfirmRequest,
+    raw_request: Request,
+    user: User = Depends(get_current_active_user),
+    service: AccountBindingService = Depends(get_account_binding_service),
+) -> MessageResponse:
+    client_ip = raw_request.headers.get("x-forwarded-for", "")
+    if client_ip:
+        client_ip = client_ip.split(",")[0].strip() or None
+    else:
+        client_ip = raw_request.client.host if raw_request.client else None
+    await service.confirm_email_bind(
+        user=user,
+        email=payload.email,
+        code=payload.code,
+        client_ip=client_ip,
+    )
+    return MessageResponse(message="Email binding completed")
 
 
 @router.get("/me/secretary", response_model=UserSecretaryDTO)

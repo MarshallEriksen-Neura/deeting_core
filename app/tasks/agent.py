@@ -18,6 +18,10 @@ logger = logging.getLogger(__name__)
 
 _MAX_AGENT_STEPS = 5
 _CONTENT_LIMIT = 20000
+_LEGACY_AUTO_INGESTION_RETIRED_MESSAGE = (
+    "Job retired: legacy database-manager ingestion workflow has been removed. "
+    "Use desktop assistant ingest and cloud provider preset persistence instead."
+)
 
 
 async def _run_ingestion_workflow(
@@ -100,7 +104,16 @@ async def _run_ingestion_workflow(
         available_tools: list[ToolDefinition] = []
         tool_id_map: dict[str, str] = {} # tool_name -> skill_id
 
-        target_skill_ids = tool_plugin_ids or ["official.skills.database"]
+        target_skill_ids = tool_plugin_ids or []
+        if not target_skill_ids:
+            await push_task_progress(
+                user_id,
+                job_id,
+                "error",
+                "任务失败：旧的 database-manager 自动摄取链路已退役，请使用新的桌面执行 + 云端持久化流程。",
+                status="failed",
+            )
+            return _LEGACY_AUTO_INGESTION_RETIRED_MESSAGE
         for s_id in target_skill_ids:
             skill = await skill_repo.get_by_id(s_id)
             if not skill: continue
@@ -211,14 +224,7 @@ Extract the relevant information from the context and use the available tools to
 
 @celery_app.task(queue="agent_tasks", name="app.tasks.agent.run_auto_ingestion_job")
 def run_auto_ingestion_job(target_url: str, instruction: str, user_id: str | None = None):
-    return run_async(
-        _run_ingestion_workflow(
-            target_url,
-            instruction,
-            user_id=user_id,
-            tool_plugin_ids=["official.skills.database"],
-        )
-    )
+    return _LEGACY_AUTO_INGESTION_RETIRED_MESSAGE
 
 
 @celery_app.task(queue="agent_tasks", name="app.tasks.agent.run_discovery_task")
@@ -229,28 +235,8 @@ def run_discovery_task(
     provider_name_hint: str | None = None,
     user_id: str | None = None,
 ):
-    def _build_discovery_instruction(cap: str, hint: str | None) -> str:
-        lines = [
-            "You are a provider discovery agent.",
-            f"Target capability: {cap}.",
-            "Use get_unified_schema(capability) to understand the gateway's canonical schema and protocol profile contract.",
-            "Extract provider details (name, slug, base_url, auth_type, auth_config_key, category, default headers/default params).",
-            "Generate capability mapping as a capability-specific protocol profile: protocol_family + transport + request template/builder + response template/output mapping, then validate it with verify_provider_template.",
-            "Persist mappings via save_provider_field_mapping after ensuring provider preset exists.",
-        ]
-        if hint: lines.append(f"Provider name hint: {hint}.")
-        return "\n".join(lines)
-
-    instruction = _build_discovery_instruction(capability, provider_name_hint)
-    return run_async(
-        _run_ingestion_workflow(
-            target_url,
-            instruction,
-            user_id=user_id,
-            model_hint=model_hint,
-            tool_plugin_names=[
-                "core.registry.provider",
-                "system/database_manager",
-            ],
-        )
+    del target_url, capability, model_hint, provider_name_hint, user_id
+    return (
+        "Job retired: legacy provider discovery workflow has been removed. "
+        "Use desktop provider probe and cloud provider preset upsert instead."
     )

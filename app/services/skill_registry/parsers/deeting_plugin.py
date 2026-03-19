@@ -50,7 +50,8 @@ def validate_deeting_manifest(manifest: dict) -> list[str]:
 class DeetingPluginParser(RepoParserPlugin):
     """
     Parser for repositories following the Deeting Plugin Standard.
-    Looks for deeting.json and llm-tool.yaml.
+    Looks for deeting.json and optionally llm-tool.yaml, while allowing SKILL.md
+    to remain the primary AI-facing contract.
     """
 
     @property
@@ -82,7 +83,7 @@ class DeetingPluginParser(RepoParserPlugin):
                 "; ".join(validation_errors),
             )
 
-        # 2. Read llm-tool.yaml (or specified path in deeting.json)
+        # 2. Read optional host contract (llm-tool.yaml or specified path in deeting.json)
         tool_spec_path = "llm-tool.yaml"
         capabilities_meta = manifest_data.get("capabilities", {})
         if isinstance(capabilities_meta, dict):

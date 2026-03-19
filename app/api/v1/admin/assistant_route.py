@@ -17,14 +17,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.deps.auth import get_current_user, require_permissions
 from app.models import User
-from app.repositories import AssistantRepository, AssistantVersionRepository
 from app.schemas.assistant import (
     AssistantCreate,
     AssistantDTO,
+    AssistantDesktopIngestRequest,
+    AssistantDesktopIngestResponse,
     AssistantListResponse,
     AssistantPublishRequest,
     AssistantUpdate,
+    AssistantVersionCreate,
 )
+from app.services.providers.llm import llm_service
+from app.repositories import AssistantRepository, AssistantVersionRepository
 from app.services.assistant.assistant_service import AssistantService
 
 router = APIRouter(prefix="/admin/assistants", tags=["Admin - Assistants"])
@@ -59,6 +63,94 @@ async def create_assistant(
         return AssistantDTO.model_validate(assistant)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.post(
+    "/ingest-from-desktop",
+    response_model=AssistantDesktopIngestResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_permissions(["assistant.manage"]))],
+)
+async def ingest_assistant_from_desktop(
+    payload: AssistantDesktopIngestRequest,
+    current_user: User = Depends(get_current_user),
+    service: AssistantService = Depends(get_assistant_service),
+) -> AssistantDesktopIngestResponse:
+    content_excerpt = payload.content_excerpt.strip()
+    if not content_excerpt:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="content_excerpt is required",
+        )
+
+    prompt = (
+        "You are a metadata extractor for AI assistants. "
+        "Return ONLY valid JSON with keys: "
+        "name, description, system_prompt, tags. "
+        "The system_prompt should be directly usable as an assistant prompt.\n\n"
+        f"Source URL: {payload.source_url.strip()}\n"
+        f"Content: {content_excerpt}\n"
+        f"Instruction: {(payload.instruction or '').strip()}\n"
+    )
+
+    try:
+        response = await llm_service.chat_completion(
+            messages=[
+                {
+                    "role": "system",
+                    "content": "Extract a structured assistant definition and respond with JSON only.",
+                },
+                {"role": "user", "content": prompt},
+            ],
+            response_format={"type": "json_object"},
+            user_id=current_user.id,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"assistant metadata refinement failed: {exc}",
+        )
+
+    refined = response if isinstance(response, dict) else None
+    if refined is None:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="assistant metadata refinement returned invalid payload",
+        )
+
+    name = str(refined.get("name") or "").strip()
+    description = str(refined.get("description") or "").strip() or None
+    system_prompt = str(refined.get("system_prompt") or "").strip()
+    tags = refined.get("tags") if isinstance(refined.get("tags"), list) else []
+    tags = [str(item).strip() for item in tags if str(item).strip()]
+
+    if not name or not system_prompt:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="assistant metadata refinement missing name or system_prompt",
+        )
+
+    assistant = await service.create_assistant(
+        payload=AssistantCreate(
+            summary=description,
+            version=AssistantVersionCreate(
+                name=name,
+                description=description,
+                system_prompt=system_prompt,
+                model_config={},
+                skill_refs=[],
+                tags=tags,
+                changelog=f"Ingested from desktop source {payload.source_url.strip()}",
+            ),
+        ),
+        owner_user_id=current_user.id,
+    )
+
+    return AssistantDesktopIngestResponse(
+        action="created",
+        id=assistant.id,
+        name=name,
+    )
 
 
 @router.get(

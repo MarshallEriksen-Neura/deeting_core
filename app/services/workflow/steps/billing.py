@@ -90,6 +90,7 @@ class BillingStep(BaseStep):
             ctx.set("billing", "pending_transaction_id", str(tx.id))
             ctx.set("billing", "pending_trace_id", ctx.trace_id)
             ctx.set("billing", "pricing_config", pricing)
+            await self._commit_session(ctx)
             return StepResult(
                 status=StepStatus.SUCCESS, data={"pending_transaction_id": str(tx.id)}
             )
@@ -126,12 +127,14 @@ class BillingStep(BaseStep):
             await self._record_usage(
                 ctx, total_cost, pricing, input_tokens, output_tokens
             )
+            await self._commit_session(ctx)
             return StepResult(status=StepStatus.SUCCESS)
 
         if ctx.is_internal:
             await self._record_usage(
                 ctx, total_cost, pricing, input_tokens, output_tokens
             )
+            await self._commit_session(ctx)
             return StepResult(
                 status=StepStatus.SUCCESS,
                 data={
@@ -156,6 +159,7 @@ class BillingStep(BaseStep):
                 )
             else:
                 ctx.set("billing", "balance_after", balance_after)
+            await self._commit_session(ctx)
             return StepResult(
                 status=StepStatus.SUCCESS,
                 data={
@@ -250,6 +254,10 @@ class BillingStep(BaseStep):
         )
         if balance_after is not None:
             ctx.set("billing", "balance_after", balance_after)
+
+    async def _commit_session(self, ctx: "WorkflowContext") -> None:
+        if ctx.db_session is not None:
+            await ctx.db_session.commit()
 
     def _sync_affinity_savings(self, ctx: WorkflowContext) -> None:
         """

@@ -13,6 +13,7 @@ from app.models.assistant import (
     AssistantVersion,
     AssistantVisibility,
 )
+from app.services.assistant.constants import ASSISTANT_COLLECTION_NAME
 from app.models.review import ReviewStatus, ReviewTask
 from app.services.assistant.assistant_market_service import ASSISTANT_MARKET_ENTITY
 from app.services.assistant.assistant_retrieval_service import (
@@ -459,7 +460,7 @@ async def test_retrieval_ensures_expert_network_collection_before_search(mocker,
     assert result == []
     ensure_mock.assert_awaited_once_with(
         client,
-        collection_name="expert_network",
+        collection_name=ASSISTANT_COLLECTION_NAME,
         vector_size=2,
     )
 

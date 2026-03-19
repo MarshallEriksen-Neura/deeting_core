@@ -15,7 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.models import DesktopOAuthGrant, DesktopOAuthSession, User
+from app.models import DesktopOAuthGrant, DesktopOAuthSession, Identity, User
 from app.repositories import UserRepository
 from app.services.users.auth_service import AuthService
 from app.services.users.user_provisioning_service import UserProvisioningService
@@ -29,6 +29,8 @@ SESSION_STATUS_EXPIRED = "expired"
 GRANT_STATUS_ACTIVE = "active"
 GRANT_STATUS_CONSUMED = "consumed"
 GRANT_STATUS_EXPIRED = "expired"
+SESSION_INTENT_LOGIN = "login"
+SESSION_INTENT_BIND = "bind"
 
 
 class DesktopOAuthError(HTTPException):
@@ -94,16 +96,51 @@ class DesktopOAuthService:
         return_scheme: str | None = None,
         client_fingerprint: str | None = None,
     ) -> DesktopOAuthStartResult:
+        return await self._create_session(
+            provider=provider,
+            return_scheme=return_scheme,
+            client_fingerprint=client_fingerprint,
+            intent=SESSION_INTENT_LOGIN,
+            user_id=None,
+        )
+
+    async def start_bind_session(
+        self,
+        *,
+        provider: str,
+        user: User,
+        return_scheme: str | None = None,
+        client_fingerprint: str | None = None,
+    ) -> DesktopOAuthStartResult:
+        return await self._create_session(
+            provider=provider,
+            return_scheme=return_scheme,
+            client_fingerprint=client_fingerprint,
+            intent=SESSION_INTENT_BIND,
+            user_id=user.id,
+        )
+
+    async def _create_session(
+        self,
+        *,
+        provider: str,
+        return_scheme: str | None,
+        client_fingerprint: str | None,
+        intent: str,
+        user_id: UUID | None,
+    ) -> DesktopOAuthStartResult:
         cfg = self._get_provider_config(provider)
         state = secrets.token_urlsafe(32)
         code_verifier = secrets.token_urlsafe(64)
         expires_at = Datetime.now() + timedelta(seconds=settings.DESKTOP_OAUTH_SESSION_TTL_SECONDS)
         session = DesktopOAuthSession(
             provider=cfg.provider,
+            intent=intent,
             state=state,
             code_verifier=code_verifier,
             redirect_scheme=(return_scheme or settings.DESKTOP_OAUTH_CALLBACK_SCHEME).strip() or settings.DESKTOP_OAUTH_CALLBACK_SCHEME,
             status=SESSION_STATUS_CREATED,
+            user_id=user_id,
             client_fingerprint=client_fingerprint,
             expires_at=expires_at,
         )
@@ -131,14 +168,28 @@ class DesktopOAuthService:
 
         token = await _exchange_provider_code(cfg, client, code=code, code_verifier=session.code_verifier)
         profile = await _fetch_provider_profile(cfg, client, token.access_token)
-        email = profile.email or f"{cfg.provider}-{profile.external_id}@oauth.local"
-        user = await self.provisioner.provision_user(
-            email=email,
-            auth_provider=cfg.provider,
-            external_id=profile.external_id,
-            username=profile.display_name or profile.username,
-            avatar=profile.avatar_url,
-        )
+        if session.intent == SESSION_INTENT_BIND:
+            if not session.user_id:
+                raise DesktopOAuthError("OAuth bind session missing user", status.HTTP_400_BAD_REQUEST)
+            user = await self.user_repo.get_by_id(session.user_id)
+            if not user:
+                raise DesktopOAuthError("OAuth bind target not found", status.HTTP_404_NOT_FOUND)
+            await self.provisioner.bind_identity_to_user(
+                user=user,
+                provider=cfg.provider,
+                external_id=profile.external_id,
+                display_name=profile.display_name or profile.username,
+                avatar=profile.avatar_url,
+            )
+        else:
+            email = profile.email or f"{cfg.provider}-{profile.external_id}@oauth.local"
+            user = await self.provisioner.provision_user(
+                email=email,
+                auth_provider=cfg.provider,
+                external_id=profile.external_id,
+                username=profile.display_name or profile.username,
+                avatar=profile.avatar_url,
+            )
 
         session.status = SESSION_STATUS_CALLBACK_RECEIVED
         session.user_id = user.id
@@ -170,6 +221,8 @@ class DesktopOAuthService:
         session = await self.db.get(DesktopOAuthSession, session_id)
         if not session or session.provider != cfg.provider:
             raise DesktopOAuthError("OAuth session not found", status.HTTP_404_NOT_FOUND)
+        if session.intent != SESSION_INTENT_LOGIN:
+            raise DesktopOAuthError("OAuth session intent mismatch", status.HTTP_400_BAD_REQUEST)
         if session.state != state:
             raise DesktopOAuthError("OAuth state mismatch", status.HTTP_400_BAD_REQUEST)
         self._ensure_session_active(session, allow_grant_issued=True)
@@ -199,11 +252,63 @@ class DesktopOAuthService:
         await self.db.commit()
         return user, tokens
 
+    async def confirm_bind_grant(
+        self,
+        *,
+        provider: str,
+        session_id: UUID,
+        state: str,
+        grant: str,
+        current_user: User,
+    ) -> Identity | None:
+        cfg = self._get_provider_config(provider)
+        session = await self.db.get(DesktopOAuthSession, session_id)
+        if not session or session.provider != cfg.provider:
+            raise DesktopOAuthError("OAuth session not found", status.HTTP_404_NOT_FOUND)
+        if session.intent != SESSION_INTENT_BIND:
+            raise DesktopOAuthError("OAuth session intent mismatch", status.HTTP_400_BAD_REQUEST)
+        if session.user_id != current_user.id:
+            raise DesktopOAuthError("OAuth bind session user mismatch", status.HTTP_403_FORBIDDEN)
+        if session.state != state:
+            raise DesktopOAuthError("OAuth state mismatch", status.HTTP_400_BAD_REQUEST)
+        self._ensure_session_active(session, allow_grant_issued=True)
+        grant_row = await self.db.scalar(
+            select(DesktopOAuthGrant).where(DesktopOAuthGrant.session_id == session.id)
+        )
+        if not grant_row:
+            raise DesktopOAuthError("OAuth grant not found", status.HTTP_404_NOT_FOUND)
+        self._ensure_grant_active(grant_row)
+        if grant_row.grant_hash != self._hash_secret(grant):
+            raise DesktopOAuthError("OAuth grant invalid", status.HTTP_400_BAD_REQUEST)
+
+        identity = await self.db.scalar(
+            select(Identity).where(
+                Identity.user_id == current_user.id,
+                Identity.provider == cfg.provider,
+            )
+        )
+
+        grant_row.status = GRANT_STATUS_CONSUMED
+        grant_row.consumed_at = Datetime.now()
+        session.status = SESSION_STATUS_EXCHANGED
+        session.completed_at = Datetime.now()
+        await self.db.commit()
+        return identity
+
     @staticmethod
-    def build_callback_redirect_url(*, scheme: str, provider: str, session_id: UUID, state: str, grant: str) -> str:
+    def build_callback_redirect_url(
+        *,
+        scheme: str,
+        provider: str,
+        session_id: UUID,
+        state: str,
+        grant: str,
+        intent: str = SESSION_INTENT_LOGIN,
+    ) -> str:
         query = urlencode(
             {
                 "provider": provider,
+                "intent": intent,
                 "session_id": str(session_id),
                 "state": state,
                 "grant": grant,

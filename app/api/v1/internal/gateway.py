@@ -108,6 +108,7 @@ from app.services.orchestrator.config import INTERNAL_DEBUG_WORKFLOW
 from app.services.orchestrator.context import Channel, ErrorSource, WorkflowContext
 from app.services.orchestrator.orchestrator import (
     GatewayOrchestrator,
+    get_internal_embedding_orchestrator,
     get_internal_orchestrator,
 )
 from app.services.orchestrator.registry import step_registry
@@ -1030,7 +1031,7 @@ async def embeddings(
     request: Request,
     request_body: EmbeddingsRequest,
     user: User = Depends(get_current_user),
-    orchestrator=Depends(get_internal_orchestrator),
+    orchestrator=Depends(get_internal_embedding_orchestrator),
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
     ctx = WorkflowContext(

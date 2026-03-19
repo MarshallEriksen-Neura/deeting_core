@@ -185,7 +185,7 @@ async def list_market_assistants(
     service: AssistantMarketService = Depends(get_market_service),
 ) -> CursorPage[AssistantMarketItem]:
     return await service.list_market(
-        user_id=current_user.id, params=params, query=q, tags=tags
+        user=current_user, params=params, query=q, tags=tags
     )
 
 
