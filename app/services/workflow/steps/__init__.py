@@ -26,6 +26,9 @@ from app.services.workflow.steps.conversation_load import ConversationLoadStep
 from app.services.workflow.steps.jit_persona_tool_injection import (
     JitPersonaToolInjectionStep,
 )
+from app.services.workflow.steps.knowledge_selection_injection import (
+    KnowledgeSelectionInjectionStep,
+)
 from app.services.workflow.steps.mcp_discovery import McpDiscoveryStep
 from app.services.workflow.steps.memory_write import MemoryWriteStep
 from app.services.workflow.steps.provider_execution import ProviderExecutionStep
@@ -60,6 +63,7 @@ __all__ = [
     "ConversationLoadStep",
     "AssistantPromptInjectionStep",
     "JitPersonaToolInjectionStep",
+    "KnowledgeSelectionInjectionStep",
     "ResolveAssetsStep",
     "ConversationAppendStep",
     "MemoryWriteStep",

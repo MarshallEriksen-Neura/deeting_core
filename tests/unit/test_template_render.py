@@ -181,6 +181,48 @@ async def test_template_render_injects_code_mode_reminder():
 
 
 @pytest.mark.asyncio
+async def test_template_render_injects_selected_knowledge_snippets():
+    step = TemplateRenderStep()
+    ctx = WorkflowContext(channel=Channel.INTERNAL)
+    ctx.set("routing", "upstream_url", "https://example.com/v1/chat/completions")
+    ctx.set(
+        "routing",
+        "protocol_profile",
+        {
+            "request": {
+                "template_engine": "simple_replace",
+                "request_template": {"messages": []},
+            },
+            "defaults": {"headers": {}, "body": {}},
+        },
+    )
+    ctx.set(
+        "validation", "validated", {"messages": [{"role": "user", "content": "付款条款"}]}
+    )
+    ctx.set(
+        "knowledge_selection",
+        "snippets",
+        [
+            {
+                "content": "付款周期为验收后 30 天。",
+                "score": 0.91,
+                "filename": "合同A.pdf",
+                "page": 2,
+            }
+        ],
+    )
+
+    result = await step.execute(ctx)
+
+    assert result.status == StepStatus.SUCCESS
+    rendered = ctx.get("template_render", "request_body")
+    system_prompt = rendered["messages"][0]["content"]
+    assert "Selected Knowledge Files" in system_prompt
+    assert "合同A.pdf" in system_prompt
+    assert "付款周期为验收后 30 天。" in system_prompt
+
+
+@pytest.mark.asyncio
 async def test_template_render_prefers_protocol_profile_request_fields():
     step = TemplateRenderStep()
     ctx = WorkflowContext(channel=Channel.INTERNAL)

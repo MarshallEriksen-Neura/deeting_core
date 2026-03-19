@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.models.spec_knowledge import SpecKnowledgeCandidate
 from app.repositories.base import BaseRepository
@@ -27,6 +27,14 @@ class SpecKnowledgeCandidateRepository(BaseRepository[SpecKnowledgeCandidate]):
         return stmt.order_by(
             SpecKnowledgeCandidate.created_at.desc(), SpecKnowledgeCandidate.id.desc()
         )
+
+    async def count_by_status(self, status: str) -> int:
+        result = await self.session.execute(
+            select(func.count()).select_from(SpecKnowledgeCandidate).where(
+                SpecKnowledgeCandidate.status == status
+            )
+        )
+        return int(result.scalar() or 0)
 
 
 __all__ = ["SpecKnowledgeCandidateRepository"]

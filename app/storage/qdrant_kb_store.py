@@ -357,6 +357,7 @@ async def scroll_points(
     limit: int = 20,
     query_filter: dict[str, Any] | None = None,
     with_payload: bool = True,
+    with_vector: bool = False,
     offset: Any | None = None,
 ) -> tuple[list[dict[str, Any]], Any | None]:
     name = str(collection_name or "").strip()
@@ -366,7 +367,7 @@ async def scroll_points(
     body: dict[str, Any] = {
         "limit": max(1, min(int(limit or 0), 100)),
         "with_payload": bool(with_payload),
-        "with_vector": False,
+        "with_vector": bool(with_vector),
     }
     if query_filter:
         body["filter"] = query_filter

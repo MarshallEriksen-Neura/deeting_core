@@ -18,6 +18,35 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _payload_string(payload: dict[str, Any], key: str) -> str | None:
+    value = payload.get(key)
+    if isinstance(value, str):
+        stripped = value.strip()
+        return stripped or None
+    return None
+
+
+def _payload_bool(payload: dict[str, Any], key: str) -> bool:
+    value = payload.get(key)
+    return value if isinstance(value, bool) else False
+
+
+def _matches_recall_when(query: str, recall_when: str | None) -> bool:
+    hint = (recall_when or "").strip().lower()
+    if not hint:
+        return True
+    query_text = query.strip().lower()
+    if not query_text:
+        return False
+    if hint in query_text or query_text in hint:
+        return True
+    for token in hint.replace(";", " ").replace(",", " ").replace("|", " ").split():
+        token = token.strip()
+        if len(token) > 1 and token in query_text:
+            return True
+    return False
+
+
 @step_registry.register
 class SemanticKernelStep(BaseStep):
     """
@@ -174,7 +203,7 @@ class SemanticKernelStep(BaseStep):
         )
 
     async def _search_memories(self, user_id: Any, query: str) -> list[dict] | None:
-        """Search contextual memories."""
+        """Search contextual memories with core/boot-first injection."""
         try:
             client = get_qdrant_client()
             vector_store = QdrantUserVectorService(
@@ -182,8 +211,45 @@ class SemanticKernelStep(BaseStep):
                 user_id=user_id,
                 fail_open=True,
             )
-            # Threshold 0.8 ensures we only inject highly relevant context
-            return await vector_store.search(query=query, limit=3, score_threshold=0.8)
+            listed_items, _ = await vector_store.list_points(limit=24, cursor=None)
+            semantic_items = await vector_store.search(query=query, limit=3, score_threshold=0.8)
+
+            core_items: list[dict[str, Any]] = []
+            for item in listed_items:
+                payload = item.get("payload") or {}
+                memory_tier = _payload_string(payload, "memory_tier")
+                is_boot = _payload_bool(payload, "is_boot")
+                is_core = _payload_bool(payload, "is_core") or memory_tier == "core"
+
+                if not is_boot and not is_core:
+                    continue
+                if not is_boot and not _matches_recall_when(
+                    query, _payload_string(payload, "recall_when")
+                ):
+                    continue
+                core_items.append(item)
+
+            core_items.sort(
+                key=lambda item: (
+                    0 if _payload_bool(item.get("payload") or {}, "is_boot") else 1,
+                    0
+                    if (
+                        _payload_bool(item.get("payload") or {}, "is_core")
+                        or _payload_string(item.get("payload") or {}, "memory_tier") == "core"
+                    )
+                    else 1,
+                )
+            )
+
+            merged: list[dict[str, Any]] = []
+            seen_ids: set[str] = set()
+            for item in [*core_items[:5], *semantic_items]:
+                item_id = str(item.get("id") or "").strip()
+                if not item_id or item_id in seen_ids:
+                    continue
+                seen_ids.add(item_id)
+                merged.append(item)
+            return merged
         except Exception as e:
             logger.warning(f"SemanticKernel: Memory search failed: {e}")
             return None

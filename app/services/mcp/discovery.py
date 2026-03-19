@@ -29,7 +29,7 @@ class MCPDiscoveryService:
         stmt = select(UserMcpServer).where(
             UserMcpServer.user_id == user_id,
             UserMcpServer.is_enabled == True,
-            UserMcpServer.server_type == "sse",
+            UserMcpServer.server_type.in_(["sse", "streamable-http"]),
         )
         result = await session.execute(stmt)
         servers = result.scalars().all()
@@ -45,7 +45,11 @@ class MCPDiscoveryService:
                 headers = await self._get_auth_headers(session, server)
 
                 # 2. Fetch Tools from Remote
-                tools = await mcp_client.fetch_tools(server.sse_url, headers=headers)
+                tools = await mcp_client.fetch_tools(
+                    server.sse_url,
+                    headers=headers,
+                    transport_type=server.server_type,
+                )
 
                 # 3. Update Cache in DB
                 tools_data = [t.model_dump() for t in tools]
@@ -91,7 +95,7 @@ class MCPDiscoveryService:
         stmt = select(UserMcpServer.tools_cache, UserMcpServer.disabled_tools).where(
             UserMcpServer.user_id == user_id,
             UserMcpServer.is_enabled == True,
-            UserMcpServer.server_type == "sse",
+            UserMcpServer.server_type.in_(["sse", "streamable-http"]),
         )
         result = await session.execute(stmt)
         all_rows = result.all()

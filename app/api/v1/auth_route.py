@@ -33,7 +33,7 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.core.http_client import create_async_http_client
 from app.core.logging import logger
-from app.deps.auth import get_current_user
+from app.deps.auth import get_current_active_user, get_current_user
 from app.models import User
 from app.schemas.auth import (
     DesktopBrowserLoginCompleteRequest,
@@ -52,6 +52,7 @@ from app.schemas.auth import (
     SendLoginCodeRequest,
     TokenPair,
 )
+from app.schemas.user import OAuthBindingConfirmResponse
 from app.services.users import AuthService, DesktopOAuthError, DesktopOAuthService
 from app.services.users.oauth_linuxdo_service import (
     LinuxDoOAuthError,
@@ -266,6 +267,29 @@ async def desktop_oauth_start(
     )
 
 
+@router.post("/oauth/desktop/bind/start", response_model=DesktopOAuthStartResponse)
+async def desktop_oauth_bind_start(
+    payload: DesktopOAuthStartRequest,
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+) -> DesktopOAuthStartResponse:
+    service = DesktopOAuthService(db)
+    try:
+        result = await service.start_bind_session(
+            provider=payload.provider,
+            user=current_user,
+            return_scheme=payload.return_scheme,
+            client_fingerprint=payload.platform,
+        )
+    except DesktopOAuthError as exc:
+        raise exc
+    return DesktopOAuthStartResponse(
+        session_id=str(result.session_id),
+        authorize_url=result.authorize_url,
+        expires_in=result.expires_in,
+    )
+
+
 @router.get("/oauth/{provider}/callback", status_code=307)
 async def desktop_oauth_callback(
     provider: str,
@@ -294,6 +318,7 @@ async def desktop_oauth_callback(
             session_id=result.session.id,
             state=result.session.state,
             grant=result.grant,
+            intent=result.session.intent,
         ),
         status_code=307,
     )
@@ -325,6 +350,33 @@ async def desktop_oauth_exchange(
             "email": user.email,
             "name": user.username,
         },
+    )
+
+
+@router.post(
+    "/oauth/desktop/bind/confirm",
+    response_model=OAuthBindingConfirmResponse,
+)
+async def desktop_oauth_bind_confirm(
+    payload: DesktopOAuthExchangeRequest,
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+) -> OAuthBindingConfirmResponse:
+    service = DesktopOAuthService(db)
+    try:
+        identity = await service.confirm_bind_grant(
+            provider=payload.provider,
+            session_id=payload.session_id,
+            state=payload.state,
+            grant=payload.grant,
+            current_user=current_user,
+        )
+    except DesktopOAuthError as exc:
+        raise exc
+    return OAuthBindingConfirmResponse(
+        provider=payload.provider,
+        is_bound=True,
+        display_name=identity.display_name if identity else None,
     )
 
 

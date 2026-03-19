@@ -47,6 +47,21 @@ class ImageGenerationOutputRepository:
             await self.session.flush()
         return output
 
+    async def update_fields(
+        self, output_id, payload: dict[str, Any], commit: bool = True
+    ) -> ImageGenerationOutput | None:
+        output = await self.session.get(ImageGenerationOutput, output_id)
+        if not output:
+            return None
+        for key, value in payload.items():
+            setattr(output, key, value)
+        if commit:
+            await self.session.commit()
+            await self.session.refresh(output)
+        else:
+            await self.session.flush()
+        return output
+
     async def delete_by_task(self, task_id, commit: bool = True) -> None:
         stmt = delete(ImageGenerationOutput).where(
             ImageGenerationOutput.task_id == task_id

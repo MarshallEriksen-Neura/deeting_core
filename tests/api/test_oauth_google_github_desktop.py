@@ -6,7 +6,7 @@ from httpx import AsyncClient
 from sqlalchemy import select
 
 from app.core.config import settings
-from app.models import Base, DesktopOAuthGrant, DesktopOAuthSession, LoginSession, User
+from app.models import Base, DesktopOAuthGrant, DesktopOAuthSession, Identity, LoginSession, User
 from app.services.users import desktop_oauth_service as oauth_desktop_svc
 from app.utils.security import decode_token
 from main import app
@@ -126,9 +126,9 @@ async def test_desktop_oauth_callback_and_exchange(monkeypatch, client: AsyncCli
 
         async def fake_profile(cfg, client, access_token):
             return oauth_desktop_svc.ProviderUserProfile(
-                external_id="google-user-1",
-                email="desktop@example.com",
-                username="desktop@example.com",
+                external_id="google-login-user-1",
+                email="desktop-login@example.com",
+                username="desktop-login@example.com",
                 display_name="Desktop User",
                 avatar_url="https://example.com/avatar.png",
             )
@@ -172,7 +172,7 @@ async def test_desktop_oauth_callback_and_exchange(monkeypatch, client: AsyncCli
         assert payload["access_token"]
         assert payload["refresh_token"]
         assert payload["token_type"] == "bearer"
-        assert payload["user"]["email"] == "desktop@example.com"
+        assert payload["user"]["email"] == "desktop-login@example.com"
 
         access_payload = decode_token(payload["access_token"])
         refresh_payload = decode_token(payload["refresh_token"])
@@ -190,7 +190,7 @@ async def test_desktop_oauth_callback_and_exchange(monkeypatch, client: AsyncCli
         assert replay.status_code == 400
 
         async with AsyncSessionLocal() as session:
-            user = await session.scalar(select(User).where(User.email == "desktop@example.com"))
+            user = await session.scalar(select(User).where(User.email == "desktop-login@example.com"))
             assert user is not None
             oauth_session = await session.get(DesktopOAuthSession, UUID(session_id))
             assert oauth_session is not None
@@ -207,6 +207,98 @@ async def test_desktop_oauth_callback_and_exchange(monkeypatch, client: AsyncCli
             assert login_session is not None
             assert login_session.current_access_jti == access_payload["jti"]
             assert login_session.current_refresh_jti == refresh_payload["jti"]
+    finally:
+        app.dependency_overrides.clear()
+        app.dependency_overrides.update(prev_overrides)
+
+
+@pytest.mark.asyncio
+async def test_desktop_oauth_bind_callback_and_confirm(
+    monkeypatch,
+    client: AsyncClient,
+    AsyncSessionLocal,
+    auth_tokens,
+):
+    _enable_google(monkeypatch)
+    from app.core.database import get_db
+
+    prev_overrides = app.dependency_overrides.copy()
+
+    async def _override_get_db():
+        async with AsyncSessionLocal() as session:
+            yield session
+
+    app.dependency_overrides[get_db] = _override_get_db
+    try:
+        async with AsyncSessionLocal() as session:
+            async with session.bind.begin() as conn:  # type: ignore[union-attr]
+                await conn.run_sync(Base.metadata.create_all)
+
+        async def fake_exchange(cfg, client, *, code, code_verifier):
+            return oauth_desktop_svc.ProviderToken(access_token="google-access-token")
+
+        async def fake_profile(cfg, client, access_token):
+            return oauth_desktop_svc.ProviderUserProfile(
+                external_id="google-bind-user-1",
+                email="bind@example.com",
+                username="bind-user",
+                display_name="Bound Google User",
+                avatar_url="https://example.com/avatar.png",
+            )
+
+        monkeypatch.setattr(oauth_desktop_svc, "_exchange_provider_code", fake_exchange)
+        monkeypatch.setattr(oauth_desktop_svc, "_fetch_provider_profile", fake_profile)
+
+        start = await client.post(
+            "/api/v1/auth/oauth/desktop/bind/start",
+            headers={"Authorization": f"Bearer {auth_tokens['access_token']}"},
+            json={"provider": "google", "return_scheme": "deeting", "platform": "desktop"},
+        )
+        assert start.status_code == 200
+        start_data = start.json()
+        parsed = urllib.parse.urlparse(start_data["authorize_url"])
+        qs = urllib.parse.parse_qs(parsed.query)
+        state = qs["state"][0]
+
+        callback = await client.get(
+            f"/api/v1/auth/oauth/google/callback?code=test-code&state={state}",
+            follow_redirects=False,
+        )
+        assert callback.status_code == 307
+        redirect = callback.headers["location"]
+        assert redirect.startswith("deeting://auth/callback?")
+        redirect_qs = urllib.parse.parse_qs(urllib.parse.urlparse(redirect).query)
+        assert redirect_qs["intent"][0] == "bind"
+        grant = redirect_qs["grant"][0]
+
+        confirm = await client.post(
+            "/api/v1/auth/oauth/desktop/bind/confirm",
+            headers={"Authorization": f"Bearer {auth_tokens['access_token']}"},
+            json={
+                "provider": "google",
+                "session_id": start_data["session_id"],
+                "state": state,
+                "grant": grant,
+            },
+        )
+        assert confirm.status_code == 200
+        payload = confirm.json()
+        assert payload["provider"] == "google"
+        assert payload["is_bound"] is True
+        assert payload["display_name"] == "Bound Google User"
+
+        async with AsyncSessionLocal() as session:
+            identity = await session.scalar(
+                select(Identity).where(
+                    Identity.provider == "google",
+                    Identity.external_id == "google-bind-user-1",
+                )
+            )
+            assert identity is not None
+            oauth_session = await session.get(DesktopOAuthSession, UUID(start_data["session_id"]))
+            assert oauth_session is not None
+            assert oauth_session.status == oauth_desktop_svc.SESSION_STATUS_EXCHANGED
+            assert oauth_session.user_id == identity.user_id
     finally:
         app.dependency_overrides.clear()
         app.dependency_overrides.update(prev_overrides)

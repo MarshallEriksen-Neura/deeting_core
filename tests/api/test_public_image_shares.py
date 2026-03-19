@@ -200,3 +200,84 @@ async def test_public_share_hides_encrypted_prompt_and_unshare(
     assert list_resp.status_code == 200
     ids = {item["share_id"] for item in list_resp.json()["items"]}
     assert share_id not in ids
+
+
+@pytest.mark.asyncio
+async def test_public_share_backfills_asset_from_source_url(
+    client: AsyncClient,
+    auth_tokens: dict,
+    AsyncSessionLocal,
+    test_user: dict,
+    monkeypatch,
+):
+    task_id = uuid.uuid4()
+    output_id = uuid.uuid4()
+    now = Datetime.now()
+
+    async def fake_fetch_image(_url: str):
+        return (b"png-bytes", "image/png")
+
+    async def fake_store_asset_bytes(_data: bytes, **_kwargs):
+        from app.services.oss.asset_storage_service import StoredAsset
+
+        return StoredAsset(
+            object_key="assets/generated/shared-backfilled.png",
+            content_type="image/png",
+            size_bytes=len(_data),
+        )
+
+    monkeypatch.setattr(
+        "app.services.image_generation.service._fetch_image",
+        fake_fetch_image,
+    )
+    monkeypatch.setattr(
+        "app.services.image_generation.service.store_asset_bytes",
+        fake_store_asset_bytes,
+    )
+
+    async with AsyncSessionLocal() as session:
+        session.add(
+            GenerationTask(
+                id=task_id,
+                user_id=uuid.UUID(test_user["id"]),
+                tenant_id=uuid.UUID(test_user["id"]),
+                api_key_id=uuid.UUID(test_user["id"]),
+                model="gpt-image-1",
+                prompt_raw="share source fallback",
+                negative_prompt=None,
+                prompt_hash="x" * 64,
+                status=ImageGenerationStatus.SUCCEEDED,
+                completed_at=now,
+                num_outputs=1,
+                width=1024,
+                height=1024,
+            )
+        )
+        session.add(
+            ImageGenerationOutput(
+                id=output_id,
+                task_id=task_id,
+                output_index=0,
+                media_asset_id=None,
+                source_url="https://example.com/source.png",
+                seed=123,
+                content_type="image/png",
+                size_bytes=10,
+                width=1024,
+                height=1024,
+                meta={},
+            )
+        )
+        await session.commit()
+
+    share_resp = await client.post(
+        f"/api/v1/internal/images/generations/{task_id}/share",
+        headers={"Authorization": f"Bearer {auth_tokens['access_token']}"},
+    )
+    assert share_resp.status_code == 200
+    share_id = share_resp.json()["share_id"]
+
+    list_resp = await client.get("/api/v1/public/images/shares")
+    assert list_resp.status_code == 200
+    matched = next(item for item in list_resp.json()["items"] if item["share_id"] == share_id)
+    assert matched["preview"]["asset_url"].startswith("http://test/api/v1/media/assets/")

@@ -1,19 +1,7 @@
 from app.tasks import agent as agent_tasks
 
 
-def test_run_discovery_task_builds_instruction(monkeypatch):
-    captured = {}
-
-    async def fake_workflow(target_url, instruction, **kwargs):
-        captured["target_url"] = target_url
-        captured["instruction"] = instruction
-        captured["model_hint"] = kwargs.get("model_hint")
-        captured["plugin_classes"] = kwargs.get("plugin_classes")
-        captured["tool_plugin_names"] = kwargs.get("tool_plugin_names")
-        return "ok"
-
-    monkeypatch.setattr(agent_tasks, "_run_ingestion_workflow", fake_workflow)
-
+def test_run_discovery_task_returns_retired_message():
     result = agent_tasks.run_discovery_task(
         "https://example.com/docs",
         capability="chat",
@@ -21,39 +9,4 @@ def test_run_discovery_task_builds_instruction(monkeypatch):
         provider_name_hint="ExampleAI",
     )
 
-    assert result == "ok"
-    assert captured["target_url"] == "https://example.com/docs"
-    assert "Target capability: chat." in captured["instruction"]
-    assert "Provider name hint: ExampleAI." in captured["instruction"]
-    assert "Generate capability mapping" in captured["instruction"]
-    assert "verify_provider_template" in captured["instruction"]
-    assert "save_provider_field_mapping" in captured["instruction"]
-    assert captured["model_hint"] == "gpt-4o"
-    assert "core.registry.provider" in captured["tool_plugin_names"]
-    assert "system/database_manager" in captured["tool_plugin_names"]
-
-
-class _DummyPlugin:
-    def get_tools(self):
-        return [
-            {
-                "type": "function",
-                "function": {
-                    "name": "verify_provider_template",
-                    "description": "verify",
-                    "parameters": {"type": "object", "properties": {}},
-                },
-            }
-        ]
-
-    async def handle_verify_provider_template(self, **kwargs):
-        return {"ok": True, "payload": kwargs}
-
-
-def test_build_tools_and_handlers_supports_handle_prefix():
-    plugin = _DummyPlugin()
-    tools, tool_map = agent_tasks._build_tools_and_handlers([plugin])
-
-    assert len(tools) == 1
-    assert tools[0].name == "verify_provider_template"
-    assert "verify_provider_template" in tool_map
+    assert "legacy provider discovery workflow has been removed" in result

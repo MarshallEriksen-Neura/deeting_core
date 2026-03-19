@@ -16,10 +16,7 @@ _LEGACY_SKILL_ID_ALIASES: dict[str, str] = {
     "core.tools.crawler": "official.skills.crawler",
     "core.tools.search": "official.skills.memory",
     "core.registry.provider": "official.skills.provider_registry",
-    "system/database_manager": "official.skills.database",
-    "system.code_interpreter": "official.skills.code_interpreter",
     "system.image_generation": "official.skills.image_generation",
-    "system.planner": "official.skills.planner",
     "system.expert_network": "official.skills.expert_network",
     "system/monitor": "official.skills.monitor",
 }

@@ -309,6 +309,45 @@ class QdrantUserVectorService(VectorStoreClient):
                 return [], None
             raise
 
+    async def get_point(self, point_id: str) -> dict[str, Any] | None:
+        pid = str(point_id or "").strip()
+        if not pid:
+            return None
+
+        collection = self._collection_name or ""
+        if not collection:
+            vector_size = await self._resolve_vector_size()
+            collection, degraded = await self._ensure_collection(vector_size=vector_size)
+            if degraded:
+                return None
+
+        self._refresh_embedding_model()
+
+        try:
+            must_filters = list((self._base_filter().get("must") or []))
+            must_filters.append({"has_id": [pid]})
+            points, _ = await scroll_points(
+                self._client,
+                collection_name=collection,
+                limit=1,
+                query_filter={"must": must_filters},
+                with_payload=True,
+                offset=None,
+            )
+            if not points:
+                return None
+            payload = points[0].get("payload") or {}
+            return {
+                "id": points[0].get("id"),
+                "content": payload.get("content", ""),
+                "payload": payload,
+            }
+        except Exception as exc:
+            if self._fail_open:
+                self._log.warning("get_point failed", exc_info=exc)
+                return None
+            raise
+
     async def update_payload(
         self, point_ids: list[str], payload: dict[str, Any]
     ) -> None:

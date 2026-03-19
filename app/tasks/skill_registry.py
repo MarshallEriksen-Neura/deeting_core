@@ -16,12 +16,14 @@ from app.services.skill_registry.dry_run_service import SkillDryRunService
 from app.services.skill_registry.skill_metrics_service import SkillMetricsService
 from app.services.skill_registry.skill_runtime_executor import SkillRuntimeExecutor
 from app.services.skill_registry.skill_self_heal_service import SkillSelfHealService
+from app.storage.qdrant_kb_collections import get_skill_collection_name
 from app.storage.qdrant_kb_store import ensure_collection_vector_size, upsert_points
+from app.storage.qdrant_kb_store import delete_points
 from app.tasks.async_runner import run_async
 
 logger = logging.getLogger(__name__)
 
-SKILL_COLLECTION_NAME = "skill_registry"
+SKILL_COLLECTION_NAME = get_skill_collection_name()
 
 
 def _build_embedding_text(skill) -> str:
@@ -193,7 +195,7 @@ def seed_builtin_plugins_to_registry_task() -> dict[str, int]:
         return run_async(_run_seed_builtins())
     except Exception as exc:
         logger.exception("skill_registry_seed_builtins_failed: %s", exc)
-        return {"created": 0, "updated": 0}
+        return {"created": 0, "updated": 0, "disabled": 0}
 
 async def _run_seed_builtins() -> dict[str, int]:
     # Resolve project root relative to this file: backend/app/tasks/skill_registry.py
@@ -202,8 +204,10 @@ async def _run_seed_builtins() -> dict[str, int]:
     
     from app.models.skill_registry import SkillRegistry
     from importlib import import_module
+    from app.services.system_assets import SystemAssetRegistryService
 
-    stats = {"created": 0, "updated": 0}
+    stats = {"created": 0, "updated": 0, "disabled": 0}
+    seeded_builtin_ids: set[str] = set()
     
     async with AsyncSessionLocal() as session:
         repo = SkillRegistryRepository(session)
@@ -221,8 +225,9 @@ async def _run_seed_builtins() -> dict[str, int]:
                     
                     skill_id = manifest.get("id")
                     if not skill_id: continue
+                    seeded_builtin_ids.add(skill_id)
                     
-                    # Read llm-tool.yaml if exists
+                    # Read optional host contract (llm-tool.yaml) if it exists
                     llm_tool_path = skill_dir / "llm-tool.yaml"
                     tools = []
                     if llm_tool_path.exists():
@@ -275,16 +280,12 @@ async def _run_seed_builtins() -> dict[str, int]:
                 # Skip if already migrated to official-skills
                 if p_id in [
                     "core.tools.crawler", 
-                    "system.code_interpreter", 
-                    "system.planner",
                     "system.image_generation",
                     "system/vector_store",
                     "system.expert_network",
-                    "system/database_manager",
                     "system/monitor",
                     "system/task_scheduler",
                     "core.registry.provider",
-                    "core.tools.provider_probe",
                     "core.execution.skill_runner"
                 ]:
                     continue
@@ -296,6 +297,7 @@ async def _run_seed_builtins() -> dict[str, int]:
                     continue
 
                 try:
+                    seeded_builtin_ids.add(p_id)
                     # ... (rest of the legacy logic)
                     mod = import_module(module_path)
                     cls = getattr(mod, class_name)
@@ -338,6 +340,24 @@ async def _run_seed_builtins() -> dict[str, int]:
                     await _run_sync_skill(p_id)
                 except Exception as e:
                     logger.error(f"Failed to seed legacy plugin {p_id}: {e}")
+
+        result = await session.execute(
+            select(SkillRegistry).where(
+                SkillRegistry.runtime == "builtin",
+                SkillRegistry.source_repo.is_(None),
+            )
+        )
+        for skill in result.scalars().all():
+            if skill.id in seeded_builtin_ids:
+                continue
+            if skill.status != "disabled":
+                skill.status = "disabled"
+                session.add(skill)
+                stats["disabled"] += 1
+            await _run_remove_skill(skill.id)
+
+        await session.flush()
+        await SystemAssetRegistryService(session).sync_skill_registry_projections()
         
         await session.commit()
     return stats
@@ -381,6 +401,29 @@ def sync_skill_to_qdrant(skill_id: str) -> str:
         return "failed"
 
 
+async def _run_remove_skill(skill_id: str) -> str:
+    if not qdrant_is_configured():
+        return "skipped"
+
+    client = get_qdrant_client()
+    await delete_points(
+        client,
+        collection_name=SKILL_COLLECTION_NAME,
+        points_ids=[skill_id],
+        wait=True,
+    )
+    return "removed"
+
+
+@celery_app.task(name="skill_registry.remove_from_qdrant")
+def remove_skill_from_qdrant(skill_id: str) -> str:
+    try:
+        return run_async(_run_remove_skill(skill_id))
+    except Exception as exc:
+        logger.exception("skill_registry_remove_from_qdrant_failed: %s", exc)
+        return "failed"
+
+
 async def _run_repo_ingestion(
     repo_url: str,
     revision: str = "main",
@@ -388,6 +431,7 @@ async def _run_repo_ingestion(
     runtime_hint: str | None = None,
     source_subdir: str | None = None,
     user_id: str | None = None,
+    submission_channel: str | None = None,
 ) -> dict:
     from app.services.skill_registry.manifest_generator import SkillManifestGenerator
     from app.services.skill_registry.parsers.deeting_plugin import DeetingPluginParser
@@ -424,10 +468,25 @@ async def _run_repo_ingestion(
             runtime_hint=runtime_hint,
             source_subdir=source_subdir,
             user_id=user_id,
+            submission_channel=submission_channel,
         )
 
+        needs_admin_review = bool(
+            result.get("manifest", {})
+            .get("deeting_ingestion", {})
+            .get("requires_admin_approval")
+        ) if isinstance(result, dict) else False
         await push_task_progress(
-            user_id, job_id, "completed", f"技能 '{result.get('skill_id')}' 已成功接入并注册！", status="completed", percentage=100
+            user_id,
+            job_id,
+            "completed",
+            (
+                f"技能 '{result.get('skill_id')}' 已提交，等待管理员审核。"
+                if needs_admin_review
+                else f"技能 '{result.get('skill_id')}' 已成功接入并注册！"
+            ),
+            status="completed",
+            percentage=100,
         )
         return result
 
@@ -440,6 +499,7 @@ def ingest_skill_repo(
     runtime_hint: str | None = None,
     source_subdir: str | None = None,
     user_id: str | None = None,
+    submission_channel: str | None = None,
 ) -> dict | str:
     try:
         result = run_async(
@@ -450,12 +510,9 @@ def ingest_skill_repo(
                 runtime_hint=runtime_hint,
                 source_subdir=source_subdir,
                 user_id=user_id,
+                submission_channel=submission_channel,
             )
         )
-        if isinstance(result, dict):
-            resolved_skill_id = result.get("skill_id")
-            if resolved_skill_id:
-                _trigger_dry_run(str(resolved_skill_id))
         return result
     except Exception as exc:
         logger.exception("skill_registry_ingest_repo_failed: %s", exc)
@@ -487,10 +544,3 @@ def dry_run_skill(skill_id: str) -> dict | str:
     except Exception as exc:
         logger.exception("skill_registry_dry_run_failed: %s", exc)
         return "failed"
-
-
-def _trigger_dry_run(skill_id: str) -> None:
-    if hasattr(dry_run_skill, "apply_async"):
-        dry_run_skill.apply_async(args=[skill_id], queue="skill_registry")
-    else:
-        dry_run_skill(skill_id)

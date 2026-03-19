@@ -32,17 +32,21 @@ async def list_plugins(
     user=Depends(get_current_user),
 ) -> list[PluginMarketSkillItem]:
     service = PluginMarketService(db)
-    rows = await service.list_market_skills(user_id=user.id, q=q, limit=limit)
+    rows = await service.list_market_skills(user=user, q=q, limit=limit)
     return [
         PluginMarketSkillItem(
-            id=skill.id,
-            name=skill.name,
+            id=str((skill.metadata_json or {}).get("skill_id") or skill.asset_id),
+            name=skill.title,
             description=skill.description,
             version=skill.version,
-            source_repo=skill.source_repo,
-            source_revision=skill.source_revision,
+            source_repo=skill.artifact_ref,
+            source_revision=skill.checksum,
+            source_kind=skill.source_kind,
             status=skill.status,
             installed=installed,
+            compatibility=(skill.metadata_json or {}).get("manifest", {}).get("compatibility")
+            if isinstance((skill.metadata_json or {}).get("manifest"), dict)
+            else None,
             created_at=skill.created_at,
             updated_at=skill.updated_at,
         )

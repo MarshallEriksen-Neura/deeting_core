@@ -222,6 +222,8 @@ class TemplateRenderStep(BaseStep):
             "semantic_memories": ctx.get("semantic_kernel", "memories"),
             # 语义内核主动人设 (新增)
             "semantic_active_persona": ctx.get("semantic_kernel", "active_persona"),
+            # 用户显式选择的知识片段
+            "selected_knowledge_snippets": ctx.get("knowledge_selection", "snippets"),
         }
 
     async def _render_template(
@@ -332,7 +334,7 @@ class TemplateRenderStep(BaseStep):
         deeting_identity = (
             "You are running inside **Deeting**, an AI agent platform.\n"
             "When the user asks to install, create, or manage skills:\n"
-            "- Deeting skills use `deeting.json` (NOT SKILL.md), `llm-tool.yaml`, and `main.py`.\n"
+            "- Deeting skills are docs-first bundles centered on `SKILL.md`. `deeting.json` is metadata/runtime/UI config, and `llm-tool.yaml` is optional when a host contract still needs it.\n"
             "- Use the `install_skill_from_repo` tool or `sys_submit_onboarding_request` to install skills.\n"
             "- User skills directory: `$APP_DATA_DIR/skills/<skill_id>/`.\n"
             "- Do NOT use opencode, codex, openclaw, or any other platform's skill paths or manifest format.\n"
@@ -373,6 +375,25 @@ class TemplateRenderStep(BaseStep):
                 score = mem.get("score", 0.0)
                 memory_block += f"- {content} (Relevance: {score:.2f})\n"
             enhanced_prompt += memory_block
+
+        selected_knowledge_snippets = context.get("selected_knowledge_snippets")
+        if selected_knowledge_snippets:
+            knowledge_block = "\n\n**Selected Knowledge Files**:\n"
+            for snippet in selected_knowledge_snippets:
+                content = str(snippet.get("content") or "").strip()
+                if not content:
+                    continue
+                filename = str(snippet.get("filename") or "Document").strip() or "Document"
+                page = snippet.get("page")
+                score = snippet.get("score")
+                suffix_parts: list[str] = []
+                if page is not None:
+                    suffix_parts.append(f"Page {page}")
+                if isinstance(score, (int, float)):
+                    suffix_parts.append(f"Relevance: {float(score):.2f}")
+                suffix = f" ({', '.join(suffix_parts)})" if suffix_parts else ""
+                knowledge_block += f"- [{filename}]{suffix}: {content}\n"
+            enhanced_prompt += knowledge_block
 
 
         # 2. 注入记忆能力提醒 (Memory Reminder)

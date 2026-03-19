@@ -7,6 +7,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.celery_app import celery_app
+from app.models import User
 from app.models.skill_registry import SkillRegistry
 from app.repositories.skill_registry_repository import SkillRegistryRepository
 from app.utils.security import is_safe_upstream_url
@@ -18,20 +19,26 @@ class PluginMarketService:
         self.skill_repo = SkillRegistryRepository(session)
 
     async def list_market_skills(
-        self, *, user_id: uuid.UUID, q: str | None = None, limit: int = 50
+        self, *, user: User, q: str | None = None, limit: int = 50
     ) -> list[tuple[SkillRegistry, bool]]:
-        stmt = select(SkillRegistry).where(
-            SkillRegistry.status == "active",
+        registry_service = SystemAssetRegistryService(self.session)
+        await registry_service.sync_projection_sources()
+        role_names = await registry_service._fetch_user_role_names(user_id=user.id)
+        assets = await registry_service.repo.list_system_assets(
+            asset_kind="skill_bundle",
+            status="active",
+            limit=max(200, limit * 5),
         )
         keyword = (q or "").strip()
-        if keyword:
-            like = f"%{keyword}%"
-            stmt = stmt.where(
-                or_(
-                    SkillRegistry.id.ilike(like),
-                    SkillRegistry.name.ilike(like),
-                    SkillRegistry.description.ilike(like),
-                )
+        filtered_assets = []
+        for asset in assets:
+            metadata = asset.metadata_json if isinstance(asset.metadata_json, dict) else {}
+            if metadata.get("registry_entity") != "skill":
+                continue
+            policy = registry_service._build_policy_snapshot(
+                asset=asset,
+                user=user,
+                role_names=role_names,
             )
         stmt = stmt.order_by(SkillRegistry.updated_at.desc(), SkillRegistry.id.asc())
         stmt = stmt.limit(max(1, min(limit, 100)))
@@ -55,6 +62,14 @@ class PluginMarketService:
             raise HTTPException(status_code=400, detail="unsafe repo_url")
         task = celery_app.send_task(
             "skill_registry.ingest_repo",
-            args=[repo_url, revision, skill_id, runtime_hint, str(user_id)],
+            kwargs={
+                "repo_url": repo_url,
+                "revision": revision,
+                "skill_id": skill_id,
+                "runtime_hint": runtime_hint,
+                "source_subdir": None,
+                "user_id": str(user_id),
+                "submission_channel": "plugin_market",
+            },
         )
         return str(task.id)

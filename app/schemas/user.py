@@ -38,6 +38,15 @@ class UserUpdate(BaseSchema):
     )
 
 
+class EmailBindingSendCodeRequest(BaseSchema):
+    email: EmailStr = Field(..., description="要绑定的邮箱")
+
+
+class EmailBindingConfirmRequest(BaseSchema):
+    email: EmailStr = Field(..., description="要绑定的邮箱")
+    code: str = Field(..., min_length=6, max_length=6, description="邮箱验证码")
+
+
 class UserRead(IDSchema, TimestampSchema):
     """用户读取响应（排除敏感字段）"""
 
@@ -74,6 +83,37 @@ class UserWithPermissions(UserRead):
     permission_flags: dict[str, int] = Field(
         default_factory=dict, description="权限标记 {can_xxx: 0/1}"
     )
+
+
+class OAuthBindingState(BaseSchema):
+    is_bound: bool = Field(..., description="是否已绑定")
+    display_name: str | None = Field(None, description="外部身份展示名")
+    bound_at: str | None = Field(None, description="绑定时间")
+
+
+class EmailBindingAlias(BaseSchema):
+    email: str = Field(..., description="可用于邮箱验证码登录的别名邮箱")
+    bound_at: str | None = Field(None, description="绑定时间")
+
+
+class EmailBindingState(BaseSchema):
+    primary_email: str = Field(..., description="主邮箱")
+    aliases: list[EmailBindingAlias] = Field(
+        default_factory=list, description="已绑定的额外邮箱登录别名"
+    )
+
+
+class UserBindingsRead(BaseSchema):
+    oauth: dict[str, OAuthBindingState] = Field(
+        default_factory=dict, description="OAuth 绑定状态"
+    )
+    email: EmailBindingState = Field(..., description="邮箱登录绑定状态")
+
+
+class OAuthBindingConfirmResponse(BaseSchema):
+    provider: str = Field(..., description="绑定的 provider")
+    is_bound: bool = Field(..., description="是否已绑定")
+    display_name: str | None = Field(None, description="展示名")
 
 
 class UserAdminUpdate(BaseSchema):

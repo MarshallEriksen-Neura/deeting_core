@@ -6,6 +6,7 @@ from fastapi_pagination.cursor import CursorPage, CursorParams
 from fastapi_pagination.ext.sqlalchemy import paginate
 
 from app.models.assistant import Assistant, AssistantStatus, AssistantVisibility
+from app.models.user import User
 from app.models.notification import NotificationLevel, NotificationType
 from app.models.review import ReviewStatus
 from app.repositories.assistant_install_repository import AssistantInstallRepository
@@ -36,6 +37,7 @@ from app.services.assistant.constants import ASSISTANT_MARKET_ENTITY
 from app.services.notifications.notification_service import NotificationService
 from app.services.review.review_service import ReviewService
 from app.services.search import get_search_backend
+from app.services.system_assets import SystemAssetRegistryService
 from app.tasks.search_index import upsert_assistant_task
 
 
@@ -100,12 +102,16 @@ class AssistantMarketService:
     async def list_market(
         self,
         *,
-        user_id: UUID | None,
+        user: User,
         params: CursorParams,
         query: str | None = None,
         tags: list[str] | None = None,
     ) -> CursorPage[AssistantMarketItem]:
         normalized_tags = self.tag_service.normalize_tags(tags)
+        registry_service = SystemAssetRegistryService(self.market_repo.session)
+        visible_system_assistant_ids = list(
+            await registry_service.list_visible_system_assistant_ids(user=user)
+        )
 
         async def _transform(rows):
             items: list[AssistantMarketItem] = []
@@ -148,10 +154,11 @@ class AssistantMarketService:
             }:
                 raise
             stmt = self.market_repo.build_market_query(
-                user_id=user_id,
+                user_id=user.id,
                 entity_type=ASSISTANT_MARKET_ENTITY,
                 query=query,
                 tags=normalized_tags,
+                visible_system_assistant_ids=visible_system_assistant_ids,
             )
             return await paginate(
                 self.market_repo.session, stmt, params=params, transformer=_transform
@@ -165,9 +172,10 @@ class AssistantMarketService:
         )
         rows = await self.market_repo.fetch_market_rows_by_ids(
             assistant_ids=assistant_ids,
-            user_id=user_id,
+            user_id=user.id,
             entity_type=ASSISTANT_MARKET_ENTITY,
             tags=normalized_tags,
+            visible_system_assistant_ids=visible_system_assistant_ids,
         )
 
         items = await _transform(rows)

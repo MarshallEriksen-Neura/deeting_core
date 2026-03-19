@@ -466,6 +466,7 @@ class SpecExecutor:
                 tool_name=tool_call.name,
                 arguments=tool_call.arguments,
                 headers=mcp_info["headers"],
+                transport_type=mcp_info["transport_type"],
             )
 
         handler = self.local_tool_handlers.get(tool_call.name)
@@ -1629,7 +1630,7 @@ class SpecAgentService:
         stmt = select(UserMcpServer).where(
             UserMcpServer.user_id == user_id,
             UserMcpServer.is_enabled == True,
-            UserMcpServer.server_type == "sse",
+            UserMcpServer.server_type.in_(["sse", "streamable-http"]),
         )
         result = await session.execute(stmt)
         servers = result.scalars().all()
@@ -1646,7 +1647,11 @@ class SpecAgentService:
                     continue
                 if name in tool_map:
                     continue
-                tool_map[name] = {"sse_url": server.sse_url, "headers": headers}
+                tool_map[name] = {
+                    "sse_url": server.sse_url,
+                    "headers": headers,
+                    "transport_type": server.server_type,
+                }
 
         return tool_map
 

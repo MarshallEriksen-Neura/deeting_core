@@ -85,7 +85,7 @@ async def test_market_install_flow_marks_installed():
         )
 
         page = await market_service.list_market(
-            user_id=user.id,
+            user=user,
             params=CursorParams(size=10),
         )
         assert page.items[0].installed is False
@@ -106,7 +106,7 @@ async def test_market_install_flow_marks_installed():
         )
 
         page_after = await market_service.list_market(
-            user_id=user.id,
+            user=user,
             params=CursorParams(size=10),
         )
         assert page_after.items[0].installed is True

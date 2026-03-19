@@ -253,6 +253,86 @@ async def test_internal_image_generation_list_tasks(
 
 
 @pytest.mark.asyncio
+async def test_internal_image_generation_list_tasks_backfills_asset_from_source_url(
+    client: AsyncClient,
+    auth_tokens: dict,
+    AsyncSessionLocal,
+    test_user: dict,
+    monkeypatch,
+):
+    task_id = uuid.uuid4()
+    output_id = uuid.uuid4()
+    now = Datetime.now()
+
+    async def fake_fetch_image(_url: str):
+        return (b"png-bytes", "image/png")
+
+    async def fake_store_asset_bytes(_data: bytes, **_kwargs):
+        from app.services.oss.asset_storage_service import StoredAsset
+
+        return StoredAsset(
+            object_key="assets/generated/backfilled.png",
+            content_type="image/png",
+            size_bytes=len(_data),
+        )
+
+    monkeypatch.setattr(
+        "app.services.image_generation.service._fetch_image",
+        fake_fetch_image,
+    )
+    monkeypatch.setattr(
+        "app.services.image_generation.service.store_asset_bytes",
+        fake_store_asset_bytes,
+    )
+
+    async with AsyncSessionLocal() as session:
+        session.add(
+            GenerationTask(
+                id=task_id,
+                user_id=uuid.UUID(test_user["id"]),
+                tenant_id=uuid.UUID(test_user["id"]),
+                api_key_id=uuid.UUID(test_user["id"]),
+                model="gpt-image-1",
+                prompt_raw="draw a lake",
+                negative_prompt=None,
+                prompt_hash="x" * 64,
+                status=ImageGenerationStatus.SUCCEEDED,
+                completed_at=now,
+            )
+        )
+        session.add(
+            ImageGenerationOutput(
+                id=output_id,
+                task_id=task_id,
+                output_index=0,
+                media_asset_id=None,
+                source_url="https://example.com/source.png",
+                seed=42,
+                content_type="image/png",
+                size_bytes=10,
+                width=512,
+                height=512,
+                meta={},
+            )
+        )
+        await session.commit()
+
+    resp = await client.get(
+        "/api/v1/internal/images/generations",
+        headers={"Authorization": f"Bearer {auth_tokens['access_token']}"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    task_item = next(item for item in data["items"] if item["task_id"] == str(task_id))
+    assert task_item["preview"]["asset_url"].startswith("http://test/api/v1/media/assets/")
+
+    async with AsyncSessionLocal() as session:
+        stored_output = await session.get(ImageGenerationOutput, output_id)
+        assert stored_output is not None
+        assert stored_output.media_asset_id is not None
+
+
+@pytest.mark.asyncio
 async def test_internal_image_generation_cancel_task(
     client: AsyncClient,
     auth_tokens: dict,

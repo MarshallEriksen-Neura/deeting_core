@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.models.review import ReviewTask
 
@@ -31,6 +31,15 @@ class ReviewTaskRepository(BaseRepository[ReviewTask]):
             )
         )
         return list(result.scalars().all())
+
+    async def count_by_status(self, entity_type: str, status: str) -> int:
+        result = await self.session.execute(
+            select(func.count()).select_from(ReviewTask).where(
+                ReviewTask.entity_type == entity_type,
+                ReviewTask.status == status,
+            )
+        )
+        return int(result.scalar() or 0)
 
     def build_query(
         self,
