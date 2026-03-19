@@ -22,7 +22,7 @@ from main import app
 async def _login(client: AsyncClient, email: str) -> dict:
     await client.post(
         "/api/v1/auth/login/code",
-        json={"email": email},
+        json={"email": email, "captcha_token": "test-token"},
     )
     response = await client.post(
         "/api/v1/auth/login",
@@ -40,7 +40,7 @@ class TestLogin:
         """测试验证码登录成功"""
         await client.post(
             "/api/v1/auth/login/code",
-            json={"email": test_user["email"]},
+            json={"email": test_user["email"], "captcha_token": "test-token"},
         )
         response = await client.post(
             "/api/v1/auth/login",
@@ -82,7 +82,7 @@ class TestLogin:
         """测试验证码错误"""
         await client.post(
             "/api/v1/auth/login/code",
-            json={"email": test_user["email"]},
+            json={"email": test_user["email"], "captcha_token": "test-token"},
         )
         response = await client.post(
             "/api/v1/auth/login",
@@ -96,7 +96,11 @@ class TestLogin:
         """新用户首登自动注册（需邀请码时提供 invite_code）。"""
         await client.post(
             "/api/v1/auth/login/code",
-            json={"email": "fresh@example.com", "invite_code": "TEST_INVITE_CODE"},
+            json={
+                "email": "fresh@example.com",
+                "invite_code": "TEST_INVITE_CODE",
+                "captcha_token": "test-token",
+            },
         )
         resp = await client.post(
             "/api/v1/auth/login",
@@ -113,7 +117,7 @@ class TestLogin:
         """未激活用户应被自动激活并登录"""
         await client.post(
             "/api/v1/auth/login/code",
-            json={"email": inactive_user["email"]},
+            json={"email": inactive_user["email"], "captcha_token": "test-token"},
         )
         response = await client.post(
             "/api/v1/auth/login",
@@ -129,7 +133,7 @@ class TestLogin:
         """验证码输错达到上限后应失效"""
         await client.post(
             "/api/v1/auth/login/code",
-            json={"email": test_user["email"]},
+            json={"email": test_user["email"], "captcha_token": "test-token"},
         )
 
         # 故意输错，超过上限

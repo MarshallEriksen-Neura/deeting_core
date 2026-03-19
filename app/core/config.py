@@ -279,6 +279,12 @@ class Settings(BaseSettings):
     ALIPAY_RECHARGE_SUBJECT: str = "Deeting Credits Recharge"
     # Cloudflare Turnstile CAPTCHA
     TURNSTILE_SECRET_KEY: str = ""
+    AUTH_EMAIL_PROVIDER: str = "log"  # log | brevo
+    BREVO_API_KEY: str = ""
+    BREVO_API_BASE_URL: str = "https://api.brevo.com/v3"
+    BREVO_SENDER_EMAIL: str = ""
+    BREVO_SENDER_NAME: str = "Deeting"
+    BREVO_SANDBOX_MODE: bool = False
 
     # 飞书回调验签（监控互动卡片）
     FEISHU_CALLBACK_SECRET: str = ""

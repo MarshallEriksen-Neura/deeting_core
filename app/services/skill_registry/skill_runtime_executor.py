@@ -4,8 +4,6 @@ import logging
 import uuid
 from typing import Any
 
-from sqlalchemy import select
-
 from app.core.sandbox.manager import sandbox_manager
 from app.repositories.skill_registry_repository import SkillRegistryRepository
 from app.services.skill_registry.runtimes.backend_task import BackendTaskRuntimeStrategy
@@ -92,27 +90,6 @@ class SkillRuntimeExecutor:
         # System/local seeded skills keep existing behavior.
         if not getattr(skill, "source_repo", None):
             return
-
-        if not user_id:
-            raise ValueError("Skill requires authenticated user installation")
-        try:
-            uid = user_id if isinstance(user_id, uuid.UUID) else uuid.UUID(str(user_id))
-        except (ValueError, TypeError) as exc:
-            raise ValueError("Skill requires valid user_id") from exc
-
-        session = getattr(self.repo, "session", None)
-        if session is None:
-            logger.warning("SkillRuntimeExecutor: missing repo session, skip install check")
-            return
-
-        from app.models.user_skill_installation import UserSkillInstallation
-
-        stmt = select(UserSkillInstallation.id).where(
-            UserSkillInstallation.user_id == uid,
-            UserSkillInstallation.skill_id == str(skill.id),
-            UserSkillInstallation.is_enabled == True,
+        raise ValueError(
+            "Cloud execution for marketplace plugins is disabled; use the desktop app"
         )
-        result = await session.execute(stmt)
-        installed_id = result.scalar_one_or_none()
-        if installed_id is None:
-            raise ValueError("Skill not installed for current user")

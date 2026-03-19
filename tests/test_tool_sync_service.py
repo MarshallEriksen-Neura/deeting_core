@@ -233,7 +233,7 @@ async def test_search_tools_rerank_uses_decision_config(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_search_tools_filters_repo_skills_by_installation(monkeypatch):
+async def test_search_tools_excludes_repo_skills_from_cloud_results(monkeypatch):
     service = ToolSyncService(embedding_service=FakeEmbeddingService())
 
     async def fake_search_system(*_args, **_kwargs):
@@ -269,9 +269,6 @@ async def test_search_tools_filters_repo_skills_by_installation(monkeypatch):
     async def fake_rerank(skill_hits):
         return skill_hits
 
-    async def fake_installed(_user_id):
-        return {"plugin.a"}
-
     monkeypatch.setattr(
         "app.services.tools.tool_sync_service.qdrant_is_configured",
         lambda: True,
@@ -280,7 +277,6 @@ async def test_search_tools_filters_repo_skills_by_installation(monkeypatch):
     monkeypatch.setattr(service, "_search_user", fake_search_user)
     monkeypatch.setattr(service, "_search_skills", fake_search_skills)
     monkeypatch.setattr(service, "_rerank_skill_hits", fake_rerank)
-    monkeypatch.setattr(service, "_list_user_installed_skill_ids", fake_installed)
     skill_payloads = {
         "core.tools.crawler": SimpleNamespace(
             id="core.tools.crawler",
@@ -314,9 +310,8 @@ async def test_search_tools_filters_repo_skills_by_installation(monkeypatch):
 
     result = await service.search_tools("find plugin", user_id=uuid.uuid4())
     names = [tool.name for tool in result]
-    assert names == ["fetch_web_content", "plugin_a_tool"]
+    assert names == ["fetch_web_content"]
     assert result[0].extra_meta and result[0].extra_meta.get("install_required") is False
-    assert result[1].extra_meta and result[1].extra_meta.get("install_required") is True
 
 
 @pytest.mark.asyncio

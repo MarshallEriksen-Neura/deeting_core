@@ -230,7 +230,7 @@ class TestAdminBan:
         """测试被封禁用户登录"""
         await client.post(
             "/api/v1/auth/login/code",
-            json={"email": banned_user["email"]},
+            json={"email": banned_user["email"], "captcha_token": "test-token"},
         )
         response = await client.post(
             "/api/v1/auth/login",

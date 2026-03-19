@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -59,23 +59,7 @@ async def list_installs(
     db: AsyncSession = Depends(get_db),
     user=Depends(get_current_user),
 ) -> list[PluginInstallationItem]:
-    service = PluginMarketService(db)
-    installs = await service.list_installations(user_id=user.id)
-    return [
-        PluginInstallationItem(
-            id=item.id,
-            user_id=item.user_id,
-            skill_id=item.skill_id,
-            alias=item.alias,
-            config_json=item.config_json or {},
-            granted_permissions=item.granted_permissions or [],
-            installed_revision=item.installed_revision,
-            is_enabled=item.is_enabled,
-            created_at=item.created_at,
-            updated_at=item.updated_at,
-        )
-        for item in installs
-    ]
+    return []
 
 
 @router.post("/plugins/submit", response_model=PluginSubmitResponse)
@@ -103,30 +87,15 @@ async def submit_plugin_repo(
 async def install_plugin(
     skill_id: str,
     payload: PluginInstallRequest,
-    response: Response,
     db: AsyncSession = Depends(get_db),
     user=Depends(get_current_user),
 ) -> PluginInstallationItem:
-    service = PluginMarketService(db)
-    installation, created = await service.install_skill(
-        user_id=user.id,
-        skill_id=skill_id,
-        alias=payload.alias,
-        config_json=payload.config_json,
-    )
-    await db.commit()
-    response.status_code = status.HTTP_201_CREATED if created else status.HTTP_200_OK
-    return PluginInstallationItem(
-        id=installation.id,
-        user_id=installation.user_id,
-        skill_id=installation.skill_id,
-        alias=installation.alias,
-        config_json=installation.config_json or {},
-        granted_permissions=installation.granted_permissions or [],
-        installed_revision=installation.installed_revision,
-        is_enabled=installation.is_enabled,
-        created_at=installation.created_at,
-        updated_at=installation.updated_at,
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail=(
+            "Cloud plugin installs are no longer supported. "
+            "Install plugins from the desktop app instead."
+        ),
     )
 
 
@@ -136,12 +105,13 @@ async def uninstall_plugin(
     db: AsyncSession = Depends(get_db),
     user=Depends(get_current_user),
 ) -> MessageResponse:
-    service = PluginMarketService(db)
-    deleted = await service.uninstall_skill(user_id=user.id, skill_id=skill_id)
-    if not deleted:
-        raise HTTPException(status_code=404, detail="installation not found")
-    await db.commit()
-    return MessageResponse(message="plugin uninstalled")
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail=(
+            "Cloud plugin installs are no longer supported. "
+            "Uninstall plugins from the desktop app instead."
+        ),
+    )
 
 
 @router.post(

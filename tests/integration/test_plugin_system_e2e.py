@@ -1,22 +1,17 @@
 import uuid
-import json
 import shutil
-from pathlib import Path
 import pytest
-from sqlalchemy import select, delete
 
 from app.models.skill_registry import SkillRegistry
-from app.models.user_skill_installation import UserSkillInstallation
 from app.agent_plugins.builtins.skill_runner.plugin import SkillRunnerPlugin
 from app.agent_plugins.core.context import ConcretePluginContext
-from app.services.tools.tool_sync_service import tool_sync_service
 from app.services.plugin_ui_bundle_storage import get_plugin_ui_bundle_dir, get_bundle_ready_marker
 
 @pytest.mark.asyncio
 async def test_plugin_full_lifecycle_e2e(db_session, current_user_obj, settings):
     """
     E2E Integration Test for Plugin System:
-    Ingestion -> Installation -> Discovery -> Execution -> UI Token.
+    Registry -> UI block rendering -> desktop-only fallback.
     """
     skill_id = f"test.plugin.{uuid.uuid4().hex[:8]}"
     revision = "v1.0.test"
@@ -48,23 +43,9 @@ async def test_plugin_full_lifecycle_e2e(db_session, current_user_obj, settings)
     get_bundle_ready_marker(bundle_dir).touch()
     
     try:
-        # 3. Test Installation
-        installation = UserSkillInstallation(
-            user_id=user_id,
-            skill_id=skill_id,
-            is_enabled=True,
-            installed_revision=revision,
-            granted_permissions=["network.outbound"]
-        )
-        db_session.add(installation)
         await db_session.commit()
 
-        # 4. Test JIT Discovery Logic
-        # (Verify that tool_sync_service can see this installed skill)
-        installed_ids = await tool_sync_service._list_user_installed_skill_ids(user_id)
-        assert skill_id in installed_ids
-
-        # 5. Test Execution Workflow (SkillRunner -> UI Gateway)
+        # 3. Test Execution Workflow (SkillRunner -> UI Gateway)
         plugin_ctx = ConcretePluginContext(
             plugin_name="core.execution.skill_runner",
             plugin_id="skill_runner",
@@ -104,9 +85,9 @@ async def test_plugin_full_lifecycle_e2e(db_session, current_user_obj, settings)
         assert len(ui_blocks) == 1
         block = ui_blocks[0]
         assert block["type"] == "ui"
-        assert block["view_type"] == "plugin.iframe"
-        assert "renderer_url" in block["metadata"]
-        assert f"/api/v1/plugin-market/ui/t/" in block["metadata"]["renderer_url"]
+        assert block["view_type"] == "custom.view"
+        assert "renderer_url" not in block["metadata"]
+        assert block["metadata"]["plugin_view_type"] == "custom.view"
         
     finally:
         # Cleanup disk
