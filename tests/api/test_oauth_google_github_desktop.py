@@ -44,6 +44,67 @@ async def test_desktop_start_returns_authorize_url(client: AsyncClient, monkeypa
 
 
 @pytest.mark.asyncio
+async def test_desktop_browser_login_complete_and_exchange(
+    client: AsyncClient, auth_tokens, monkeypatch
+):
+    monkeypatch.setattr(settings, "DESKTOP_OAUTH_CALLBACK_SCHEME", "deeting")
+
+    start = await client.post(
+        "/api/v1/auth/desktop/browser/start",
+        json={"return_scheme": "deeting", "platform": "desktop"},
+    )
+    assert start.status_code == 200
+    start_data = start.json()
+    session_id = start_data["session_id"]
+    assert UUID(session_id)
+    assert start_data["expires_in"] == settings.DESKTOP_OAUTH_SESSION_TTL_SECONDS
+
+    complete = await client.post(
+        "/api/v1/auth/desktop/browser/complete",
+        json={"session_id": session_id},
+        headers={"Authorization": f"Bearer {auth_tokens['access_token']}"},
+    )
+    assert complete.status_code == 200
+    deep_link_url = complete.json()["deep_link_url"]
+    assert deep_link_url.startswith("deeting://auth/callback?")
+
+    deep_link_qs = urllib.parse.parse_qs(urllib.parse.urlparse(deep_link_url).query)
+    assert deep_link_qs["provider"][0] == "browser"
+    assert deep_link_qs["session_id"][0] == session_id
+
+    exchange = await client.post(
+        "/api/v1/auth/oauth/desktop/exchange",
+        json={
+            "provider": "browser",
+            "session_id": session_id,
+            "state": deep_link_qs["state"][0],
+            "grant": deep_link_qs["grant"][0],
+        },
+    )
+    assert exchange.status_code == 200
+    payload = exchange.json()
+    assert payload["access_token"]
+    assert payload["refresh_token"]
+    assert payload["token_type"] == "bearer"
+    assert payload["user"]["id"]
+
+    access_payload = decode_token(payload["access_token"])
+    refresh_payload = decode_token(payload["refresh_token"])
+    assert access_payload["sid"] == refresh_payload["sid"]
+
+    replay = await client.post(
+        "/api/v1/auth/oauth/desktop/exchange",
+        json={
+            "provider": "browser",
+            "session_id": session_id,
+            "state": deep_link_qs["state"][0],
+            "grant": deep_link_qs["grant"][0],
+        },
+    )
+    assert replay.status_code == 400
+
+
+@pytest.mark.asyncio
 async def test_desktop_oauth_callback_and_exchange(monkeypatch, client: AsyncClient, AsyncSessionLocal):
     _enable_google(monkeypatch)
     from app.core.database import get_db

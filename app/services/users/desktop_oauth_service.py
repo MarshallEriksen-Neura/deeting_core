@@ -26,6 +26,7 @@ SESSION_STATUS_CALLBACK_RECEIVED = "callback_received"
 SESSION_STATUS_GRANT_ISSUED = "grant_issued"
 SESSION_STATUS_EXCHANGED = "exchanged"
 SESSION_STATUS_EXPIRED = "expired"
+BROWSER_LOGIN_PROVIDER = "browser"
 GRANT_STATUS_ACTIVE = "active"
 GRANT_STATUS_CONSUMED = "consumed"
 GRANT_STATUS_EXPIRED = "expired"
@@ -117,6 +118,32 @@ class DesktopOAuthService:
             expires_in=settings.DESKTOP_OAUTH_SESSION_TTL_SECONDS,
         )
 
+    async def start_browser_login_session(
+        self,
+        *,
+        return_scheme: str | None = None,
+        client_fingerprint: str | None = None,
+    ) -> DesktopOAuthStartResult:
+        state = secrets.token_urlsafe(32)
+        expires_at = Datetime.now() + timedelta(seconds=settings.DESKTOP_OAUTH_SESSION_TTL_SECONDS)
+        session = DesktopOAuthSession(
+            provider=BROWSER_LOGIN_PROVIDER,
+            state=state,
+            code_verifier=secrets.token_urlsafe(32),
+            redirect_scheme=(return_scheme or settings.DESKTOP_OAUTH_CALLBACK_SCHEME).strip() or settings.DESKTOP_OAUTH_CALLBACK_SCHEME,
+            status=SESSION_STATUS_CREATED,
+            client_fingerprint=client_fingerprint,
+            expires_at=expires_at,
+        )
+        self.db.add(session)
+        await self.db.commit()
+        await self.db.refresh(session)
+        return DesktopOAuthStartResult(
+            session_id=session.id,
+            authorize_url="",
+            expires_in=settings.DESKTOP_OAUTH_SESSION_TTL_SECONDS,
+        )
+
     async def complete_callback(
         self,
         *,
@@ -166,9 +193,9 @@ class DesktopOAuthService:
         state: str,
         grant: str,
     ) -> tuple[User, Any]:
-        cfg = self._get_provider_config(provider)
+        normalized_provider = (provider or "").strip().lower()
         session = await self.db.get(DesktopOAuthSession, session_id)
-        if not session or session.provider != cfg.provider:
+        if not session or session.provider != normalized_provider:
             raise DesktopOAuthError("OAuth session not found", status.HTTP_404_NOT_FOUND)
         if session.state != state:
             raise DesktopOAuthError("OAuth state mismatch", status.HTTP_400_BAD_REQUEST)
@@ -198,6 +225,48 @@ class DesktopOAuthService:
         session.completed_at = Datetime.now()
         await self.db.commit()
         return user, tokens
+
+    async def issue_browser_login_grant(
+        self,
+        *,
+        session_id: UUID,
+        user: User,
+    ) -> str:
+        session = await self.db.get(DesktopOAuthSession, session_id)
+        if not session or session.provider != BROWSER_LOGIN_PROVIDER:
+            raise DesktopOAuthError("Desktop browser login session not found", status.HTTP_404_NOT_FOUND)
+        self._ensure_session_active(session)
+
+        existing_grant = await self.db.scalar(
+            select(DesktopOAuthGrant).where(DesktopOAuthGrant.session_id == session.id)
+        )
+        if existing_grant:
+            self._ensure_grant_active(existing_grant)
+            raise DesktopOAuthError("Desktop browser login grant already issued", status.HTTP_400_BAD_REQUEST)
+
+        session.user_id = user.id
+        session.status = SESSION_STATUS_CALLBACK_RECEIVED
+        session.error_code = None
+        session.error_detail = None
+
+        raw_grant = secrets.token_urlsafe(32)
+        grant = DesktopOAuthGrant(
+            session_id=session.id,
+            grant_hash=self._hash_secret(raw_grant),
+            status=GRANT_STATUS_ACTIVE,
+            expires_at=Datetime.now() + timedelta(seconds=settings.DESKTOP_OAUTH_GRANT_TTL_SECONDS),
+        )
+        self.db.add(grant)
+        session.status = SESSION_STATUS_GRANT_ISSUED
+        await self.db.commit()
+        await self.db.refresh(session)
+        return self.build_callback_redirect_url(
+            scheme=session.redirect_scheme,
+            provider=session.provider,
+            session_id=session.id,
+            state=session.state,
+            grant=raw_grant,
+        )
 
     @staticmethod
     def build_callback_redirect_url(*, scheme: str, provider: str, session_id: UUID, state: str, grant: str) -> str:

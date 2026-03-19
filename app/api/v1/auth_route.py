@@ -36,6 +36,10 @@ from app.core.logging import logger
 from app.deps.auth import get_current_user
 from app.models import User
 from app.schemas.auth import (
+    DesktopBrowserLoginCompleteRequest,
+    DesktopBrowserLoginCompleteResponse,
+    DesktopBrowserLoginStartRequest,
+    DesktopBrowserLoginStartResponse,
     DesktopOAuthExchangeRequest,
     DesktopOAuthExchangeResponse,
     DesktopOAuthStartRequest,
@@ -209,6 +213,36 @@ async def refresh_token(
     await db.commit()
     _set_refresh_cookie(response, tokens.refresh_token)
     return tokens
+
+
+@router.post("/desktop/browser/start", response_model=DesktopBrowserLoginStartResponse)
+async def desktop_browser_login_start(
+    payload: DesktopBrowserLoginStartRequest,
+    db: AsyncSession = Depends(get_db),
+) -> DesktopBrowserLoginStartResponse:
+    service = DesktopOAuthService(db)
+    result = await service.start_browser_login_session(
+        return_scheme=payload.return_scheme,
+        client_fingerprint=payload.platform,
+    )
+    return DesktopBrowserLoginStartResponse(
+        session_id=str(result.session_id),
+        expires_in=result.expires_in,
+    )
+
+
+@router.post("/desktop/browser/complete", response_model=DesktopBrowserLoginCompleteResponse)
+async def desktop_browser_login_complete(
+    payload: DesktopBrowserLoginCompleteRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> DesktopBrowserLoginCompleteResponse:
+    service = DesktopOAuthService(db)
+    deep_link_url = await service.issue_browser_login_grant(
+        session_id=payload.session_id,
+        user=current_user,
+    )
+    return DesktopBrowserLoginCompleteResponse(deep_link_url=deep_link_url)
 
 
 @router.post("/oauth/desktop/start", response_model=DesktopOAuthStartResponse)
