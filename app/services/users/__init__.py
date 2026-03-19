@@ -4,6 +4,7 @@
 
 from app.services.users.auth_service import AuthService
 from app.services.users.account_binding_service import AccountBindingService
+from app.services.users.desktop_browser_login_service import DesktopBrowserLoginService
 from app.services.users.desktop_oauth_service import (
     DesktopOAuthError,
     DesktopOAuthService,
@@ -30,6 +31,7 @@ from app.services.users.user_service import UserService
 __all__ = [
     "AuthService",
     "AccountBindingService",
+    "DesktopBrowserLoginService",
     "DesktopOAuthError",
     "DesktopOAuthService",
     "InviteCodeService",

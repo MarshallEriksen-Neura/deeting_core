@@ -153,6 +153,107 @@ class TestLogin:
         assert "invalid" in resp_ok.json()["detail"].lower()
 
 
+class TestDesktopBrowserLogin:
+    """桌面浏览器代理登录测试"""
+
+    @pytest.mark.asyncio
+    async def test_desktop_browser_login_start(self, client: AsyncClient):
+        response = await client.post(
+            "/api/v1/auth/desktop/browser/start",
+            json={"return_scheme": "deeting", "platform": "desktop"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert UUID(data["session_id"])
+        assert data["expires_in"] > 0
+
+    @pytest.mark.asyncio
+    async def test_desktop_browser_login_complete_and_exchange(
+        self,
+        client: AsyncClient,
+        auth_tokens: dict,
+        AsyncSessionLocal,
+    ):
+        start = await client.post(
+            "/api/v1/auth/desktop/browser/start",
+            json={"return_scheme": "deeting", "platform": "desktop"},
+        )
+        assert start.status_code == 200
+        session_id = start.json()["session_id"]
+
+        complete = await client.post(
+            "/api/v1/auth/desktop/browser/complete",
+            headers={"Authorization": f"Bearer {auth_tokens['access_token']}"},
+            json={"session_id": session_id},
+        )
+        assert complete.status_code == 200
+        deep_link_url = complete.json()["deep_link_url"]
+        assert deep_link_url.startswith("deeting://auth/callback?")
+
+        from urllib.parse import parse_qs, urlparse
+
+        params = parse_qs(urlparse(deep_link_url).query)
+        assert params["provider"][0] == "browser"
+        assert params["session_id"][0] == session_id
+        grant = params["grant"][0]
+
+        exchange = await client.post(
+            "/api/v1/auth/desktop/browser/exchange",
+            json={
+                "session_id": session_id,
+                "grant": grant,
+            },
+        )
+        assert exchange.status_code == 200
+        payload = exchange.json()
+        assert payload["access_token"]
+        assert payload["refresh_token"]
+        assert payload["token_type"] == "bearer"
+        assert payload["user"]["email"] == "testuser@example.com"
+
+        access_payload = decode_token(payload["access_token"])
+        refresh_payload = decode_token(payload["refresh_token"])
+        assert access_payload["sid"] == refresh_payload["sid"]
+
+        replay = await client.post(
+            "/api/v1/auth/desktop/browser/exchange",
+            json={
+                "session_id": session_id,
+                "grant": grant,
+            },
+        )
+        assert replay.status_code == 400
+
+        async with AsyncSessionLocal() as session:
+            login_session = await session.scalar(
+                select(LoginSession).where(
+                    LoginSession.session_key == access_payload["sid"],
+                )
+            )
+
+        assert login_session is not None
+        assert login_session.current_access_jti == access_payload["jti"]
+        assert login_session.current_refresh_jti == refresh_payload["jti"]
+
+    @pytest.mark.asyncio
+    async def test_desktop_browser_login_complete_requires_auth(
+        self,
+        client: AsyncClient,
+    ):
+        start = await client.post(
+            "/api/v1/auth/desktop/browser/start",
+            json={"return_scheme": "deeting", "platform": "desktop"},
+        )
+        assert start.status_code == 200
+
+        complete = await client.post(
+            "/api/v1/auth/desktop/browser/complete",
+            json={"session_id": start.json()["session_id"]},
+        )
+        assert complete.status_code == 401
+
+
 class TestTokenRefresh:
     """Token 刷新测试"""
 

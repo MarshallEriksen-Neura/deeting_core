@@ -90,6 +90,39 @@ class DesktopOAuthStartResponse(BaseSchema):
     expires_in: int = Field(..., description="Session ttl seconds")
 
 
+class DesktopBrowserLoginStartRequest(BaseSchema):
+    """桌面端浏览器代理登录启动请求。"""
+
+    return_scheme: str | None = Field(None, description="桌面回调 scheme")
+    platform: str = Field("desktop", description="平台标记")
+
+
+class DesktopBrowserLoginStartResponse(BaseSchema):
+    """桌面端浏览器代理登录启动响应。"""
+
+    session_id: UUID = Field(..., description="浏览器登录 session id")
+    expires_in: int = Field(..., description="Session ttl seconds")
+
+
+class DesktopBrowserLoginCompleteRequest(BaseSchema):
+    """浏览器端完成桌面登录会话请求。"""
+
+    session_id: UUID = Field(..., description="浏览器登录 session id")
+
+
+class DesktopBrowserLoginCompleteResponse(BaseSchema):
+    """浏览器端完成桌面登录会话响应。"""
+
+    deep_link_url: str = Field(..., description="Desktop deep link callback url")
+
+
+class DesktopBrowserLoginExchangeRequest(BaseSchema):
+    """桌面端浏览器代理登录兑换请求。"""
+
+    session_id: UUID = Field(..., description="浏览器登录 session id")
+    grant: str = Field(..., description="One-time desktop browser login grant")
+
+
 class DesktopOAuthExchangeRequest(BaseSchema):
     """桌面端 OAuth 授权码兑换请求。"""
 

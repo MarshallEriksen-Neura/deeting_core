@@ -36,6 +36,11 @@ from app.core.logging import logger
 from app.deps.auth import get_current_active_user, get_current_user
 from app.models import User
 from app.schemas.auth import (
+    DesktopBrowserLoginCompleteRequest,
+    DesktopBrowserLoginCompleteResponse,
+    DesktopBrowserLoginExchangeRequest,
+    DesktopBrowserLoginStartRequest,
+    DesktopBrowserLoginStartResponse,
     DesktopOAuthExchangeRequest,
     DesktopOAuthExchangeResponse,
     DesktopOAuthStartRequest,
@@ -49,7 +54,12 @@ from app.schemas.auth import (
     TokenPair,
 )
 from app.schemas.user import OAuthBindingConfirmResponse
-from app.services.users import AuthService, DesktopOAuthError, DesktopOAuthService
+from app.services.users import (
+    AuthService,
+    DesktopBrowserLoginService,
+    DesktopOAuthError,
+    DesktopOAuthService,
+)
 from app.services.users.oauth_linuxdo_service import (
     LinuxDoOAuthError,
     build_authorize_url,
@@ -212,24 +222,60 @@ async def refresh_token(
     return tokens
 
 
-@router.post("/oauth/desktop/start", response_model=DesktopOAuthStartResponse)
-async def desktop_oauth_start(
-    payload: DesktopOAuthStartRequest,
+@router.post("/desktop/browser/start", response_model=DesktopBrowserLoginStartResponse)
+async def desktop_browser_login_start(
+    payload: DesktopBrowserLoginStartRequest,
     db: AsyncSession = Depends(get_db),
-) -> DesktopOAuthStartResponse:
-    service = DesktopOAuthService(db)
-    try:
-        result = await service.start_session(
-            provider=payload.provider,
-            return_scheme=payload.return_scheme,
-            client_fingerprint=payload.platform,
-        )
-    except DesktopOAuthError as exc:
-        raise exc
-    return DesktopOAuthStartResponse(
+) -> DesktopBrowserLoginStartResponse:
+    service = DesktopBrowserLoginService(db)
+    result = await service.start_session(
+        return_scheme=payload.return_scheme,
+        client_fingerprint=payload.platform,
+    )
+    return DesktopBrowserLoginStartResponse(
         session_id=str(result.session_id),
-        authorize_url=result.authorize_url,
         expires_in=result.expires_in,
+    )
+
+
+@router.post(
+    "/desktop/browser/complete",
+    response_model=DesktopBrowserLoginCompleteResponse,
+)
+async def desktop_browser_login_complete(
+    payload: DesktopBrowserLoginCompleteRequest,
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+) -> DesktopBrowserLoginCompleteResponse:
+    service = DesktopBrowserLoginService(db)
+    result = await service.complete_session(
+        session_id=payload.session_id,
+        user=current_user,
+    )
+    return DesktopBrowserLoginCompleteResponse(deep_link_url=result.deep_link_url)
+
+
+@router.post("/desktop/browser/exchange", response_model=DesktopOAuthExchangeResponse)
+async def desktop_browser_login_exchange(
+    payload: DesktopBrowserLoginExchangeRequest,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+) -> DesktopOAuthExchangeResponse:
+    service = DesktopBrowserLoginService(db)
+    user, tokens = await service.exchange_grant(
+        session_id=payload.session_id,
+        grant=payload.grant,
+    )
+    _set_refresh_cookie(response, tokens.refresh_token)
+    return DesktopOAuthExchangeResponse(
+        access_token=tokens.access_token,
+        refresh_token=tokens.refresh_token,
+        token_type=tokens.token_type,
+        user={
+            "id": str(user.id),
+            "email": user.email,
+            "name": user.username,
+        },
     )
 
 
@@ -287,35 +333,6 @@ async def desktop_oauth_callback(
             intent=result.session.intent,
         ),
         status_code=307,
-    )
-
-
-@router.post("/oauth/desktop/exchange", response_model=DesktopOAuthExchangeResponse)
-async def desktop_oauth_exchange(
-    payload: DesktopOAuthExchangeRequest,
-    response: Response,
-    db: AsyncSession = Depends(get_db),
-) -> DesktopOAuthExchangeResponse:
-    service = DesktopOAuthService(db)
-    try:
-        user, tokens = await service.exchange_grant(
-            provider=payload.provider,
-            session_id=payload.session_id,
-            state=payload.state,
-            grant=payload.grant,
-        )
-    except DesktopOAuthError as exc:
-        raise exc
-    _set_refresh_cookie(response, tokens.refresh_token)
-    return DesktopOAuthExchangeResponse(
-        access_token=tokens.access_token,
-        refresh_token=tokens.refresh_token,
-        token_type=tokens.token_type,
-        user={
-            "id": str(user.id),
-            "email": user.email,
-            "name": user.username,
-        },
     )
 
 

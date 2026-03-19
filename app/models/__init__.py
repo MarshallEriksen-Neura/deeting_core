@@ -40,6 +40,7 @@ from .billing import (
     QuotaResetPeriod as BillingQuotaResetPeriod,
 )
 from .bridge_agent_token import BridgeAgentToken
+from .desktop_browser_login import DesktopBrowserLoginGrant, DesktopBrowserLoginSession
 from .conversation import (
     ConversationChannel,
     ConversationMessage,
@@ -178,6 +179,8 @@ __all__ = [
     "BillingQuotaResetPeriod",
     # Bridge / MCP
     "BridgeAgentToken",
+    "DesktopBrowserLoginSession",
+    "DesktopBrowserLoginGrant",
     "McpMarketTool",
     "McpToolCategory",
     "UserMcpSubscription",

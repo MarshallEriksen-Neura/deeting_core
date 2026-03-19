@@ -12,9 +12,6 @@ from app.models.skill_registry import SkillRegistry
 from app.models.system_asset import SystemAsset
 from app.services.assistant.constants import ASSISTANT_MARKET_ENTITY
 from app.repositories.system_asset_repository import SystemAssetRepository
-from app.repositories.user_skill_installation_repository import (
-    UserSkillInstallationRepository,
-)
 from app.schemas.system_asset import (
     SystemAssetPolicySnapshot,
     SystemAssetSyncItem,
@@ -297,30 +294,12 @@ class SystemAssetRegistryService:
             else defaults["allowed_role_names"],
         }
 
-    async def _fetch_user_skill_install_map(self, *, user_id: UUID) -> dict[str, object]:
-        installs = await UserSkillInstallationRepository(self.session).list_by_user(
-            user_id,
-            enabled_only=False,
-        )
-        return {str(install.skill_id): install for install in installs if install.skill_id}
-
     def _build_sync_metadata(
         self,
         *,
         asset: SystemAsset,
-        skill_install_map: dict[str, object],
     ) -> dict:
         metadata = dict(asset.metadata_json or {}) if isinstance(asset.metadata_json, dict) else {}
-        if metadata.get("registry_entity") != "skill":
-            return metadata
-
-        skill_id = str(metadata.get("skill_id") or "").strip()
-        if not skill_id:
-            return metadata
-
-        metadata["user_install"] = self._serialize_user_skill_install(
-            skill_install_map.get(skill_id)
-        )
         return metadata
 
     async def _list_sync_items(
@@ -338,11 +317,6 @@ class SystemAssetRegistryService:
             limit=limit,
         )
         role_names = await self._fetch_user_role_names(user_id=user.id)
-        skill_install_map = (
-            await self._fetch_user_skill_install_map(user_id=user.id)
-            if registry_entity == "skill"
-            else {}
-        )
         items: list[SystemAssetSyncItem] = []
         for asset in assets:
             metadata = asset.metadata_json if isinstance(asset.metadata_json, dict) else {}
@@ -364,24 +338,11 @@ class SystemAssetRegistryService:
                     checksum=asset.checksum,
                     metadata_json=self._build_sync_metadata(
                         asset=asset,
-                        skill_install_map=skill_install_map,
                     ),
                     policy_snapshot=policy,
                 )
             )
         return items
-
-    @staticmethod
-    def _serialize_user_skill_install(install: object | None) -> dict | None:
-        if install is None:
-            return None
-        return {
-            "alias": getattr(install, "alias", None),
-            "config_json": getattr(install, "config_json", {}) or {},
-            "granted_permissions": list(getattr(install, "granted_permissions", []) or []),
-            "installed_revision": getattr(install, "installed_revision", None),
-            "is_enabled": bool(getattr(install, "is_enabled", False)),
-        }
 
     @staticmethod
     def _datetime_to_iso(value) -> str | None:
