@@ -279,6 +279,50 @@ async def desktop_browser_login_exchange(
     )
 
 
+@router.post("/oauth/desktop/start", response_model=DesktopOAuthStartResponse)
+async def desktop_oauth_login_start(
+    payload: DesktopOAuthStartRequest,
+    db: AsyncSession = Depends(get_db),
+) -> DesktopOAuthStartResponse:
+    service = DesktopOAuthService(db)
+    result = await service.start_session(
+        provider=payload.provider,
+        return_scheme=payload.return_scheme,
+        client_fingerprint=payload.platform,
+    )
+    return DesktopOAuthStartResponse(
+        session_id=str(result.session_id),
+        authorize_url=result.authorize_url,
+        expires_in=result.expires_in,
+    )
+
+
+@router.post("/oauth/desktop/exchange", response_model=DesktopOAuthExchangeResponse)
+async def desktop_oauth_login_exchange(
+    payload: DesktopOAuthExchangeRequest,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+) -> DesktopOAuthExchangeResponse:
+    service = DesktopOAuthService(db)
+    user, tokens = await service.exchange_grant(
+        provider=payload.provider,
+        session_id=payload.session_id,
+        state=payload.state,
+        grant=payload.grant,
+    )
+    _set_refresh_cookie(response, tokens.refresh_token)
+    return DesktopOAuthExchangeResponse(
+        access_token=tokens.access_token,
+        refresh_token=tokens.refresh_token,
+        token_type=tokens.token_type,
+        user={
+            "id": str(user.id),
+            "email": user.email,
+            "name": user.username,
+        },
+    )
+
+
 @router.post("/oauth/desktop/bind/start", response_model=DesktopOAuthStartResponse)
 async def desktop_oauth_bind_start(
     payload: DesktopOAuthStartRequest,

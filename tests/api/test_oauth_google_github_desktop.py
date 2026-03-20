@@ -27,6 +27,194 @@ def _enable_github(monkeypatch):
     monkeypatch.setattr(settings, "DESKTOP_OAUTH_CALLBACK_SCHEME", "deeting")
 
 
+def _enable_linuxdo(monkeypatch):
+    monkeypatch.setattr(settings, "LINUXDO_OAUTH_ENABLED", True)
+    monkeypatch.setattr(settings, "LINUXDO_CLIENT_ID", "linuxdo-client")
+    monkeypatch.setattr(settings, "LINUXDO_CLIENT_SECRET", "linuxdo-secret")
+    monkeypatch.setattr(
+        settings,
+        "LINUXDO_REDIRECT_URI",
+        "https://api.example.com/api/v1/auth/oauth/linuxdo/callback",
+    )
+    monkeypatch.setattr(settings, "DESKTOP_OAUTH_CALLBACK_SCHEME", "deeting")
+
+
+@pytest.mark.asyncio
+async def test_desktop_oauth_login_start_callback_and_exchange(
+    monkeypatch,
+    client: AsyncClient,
+    AsyncSessionLocal,
+):
+    _enable_google(monkeypatch)
+    from app.core.database import get_db
+
+    prev_overrides = app.dependency_overrides.copy()
+
+    async def _override_get_db():
+        async with AsyncSessionLocal() as session:
+            yield session
+
+    app.dependency_overrides[get_db] = _override_get_db
+    try:
+        async with AsyncSessionLocal() as session:
+            async with session.bind.begin() as conn:  # type: ignore[union-attr]
+                await conn.run_sync(Base.metadata.create_all)
+
+        async def fake_exchange(cfg, client, *, code, code_verifier):
+            return oauth_desktop_svc.ProviderToken(access_token="google-access-token")
+
+        async def fake_profile(cfg, client, access_token):
+            return oauth_desktop_svc.ProviderUserProfile(
+                external_id="google-login-user-1",
+                email="login@example.com",
+                username="login-user",
+                display_name="Google Login User",
+                avatar_url="https://example.com/avatar-login.png",
+            )
+
+        monkeypatch.setattr(oauth_desktop_svc, "_exchange_provider_code", fake_exchange)
+        monkeypatch.setattr(oauth_desktop_svc, "_fetch_provider_profile", fake_profile)
+
+        start = await client.post(
+            "/api/v1/auth/oauth/desktop/start",
+            json={"provider": "google", "return_scheme": "deeting", "platform": "desktop"},
+        )
+        assert start.status_code == 200
+        start_data = start.json()
+        parsed = urllib.parse.urlparse(start_data["authorize_url"])
+        qs = urllib.parse.parse_qs(parsed.query)
+        state = qs["state"][0]
+
+        callback = await client.get(
+            f"/api/v1/auth/oauth/google/callback?code=test-code&state={state}",
+            follow_redirects=False,
+        )
+        assert callback.status_code == 307
+        redirect = callback.headers["location"]
+        assert redirect.startswith("deeting://auth/callback?")
+        redirect_qs = urllib.parse.parse_qs(urllib.parse.urlparse(redirect).query)
+        assert redirect_qs["provider"][0] == "google"
+        grant = redirect_qs["grant"][0]
+
+        exchange = await client.post(
+            "/api/v1/auth/oauth/desktop/exchange",
+            json={
+                "provider": "google",
+                "session_id": start_data["session_id"],
+                "state": state,
+                "grant": grant,
+            },
+        )
+        assert exchange.status_code == 200
+        payload = exchange.json()
+        assert payload["access_token"]
+        assert payload["refresh_token"]
+        assert payload["token_type"] == "bearer"
+        assert payload["user"]["email"] == "login@example.com"
+
+        replay = await client.post(
+            "/api/v1/auth/oauth/desktop/exchange",
+            json={
+                "provider": "google",
+                "session_id": start_data["session_id"],
+                "state": state,
+                "grant": grant,
+            },
+        )
+        assert replay.status_code == 400
+
+        async with AsyncSessionLocal() as session:
+            oauth_session = await session.get(DesktopOAuthSession, UUID(start_data["session_id"]))
+            assert oauth_session is not None
+            assert oauth_session.status == oauth_desktop_svc.SESSION_STATUS_EXCHANGED
+    finally:
+        app.dependency_overrides.clear()
+        app.dependency_overrides.update(prev_overrides)
+
+
+@pytest.mark.asyncio
+async def test_desktop_linuxdo_oauth_login_start_callback_and_exchange(
+    monkeypatch,
+    client: AsyncClient,
+    AsyncSessionLocal,
+):
+    _enable_linuxdo(monkeypatch)
+    from app.core.database import get_db
+
+    prev_overrides = app.dependency_overrides.copy()
+
+    async def _override_get_db():
+        async with AsyncSessionLocal() as session:
+            yield session
+
+    app.dependency_overrides[get_db] = _override_get_db
+    try:
+        async with AsyncSessionLocal() as session:
+            async with session.bind.begin() as conn:  # type: ignore[union-attr]
+                await conn.run_sync(Base.metadata.create_all)
+
+        async def fake_exchange(cfg, client, *, code, code_verifier):
+            return oauth_desktop_svc.ProviderToken(access_token="linuxdo-access-token")
+
+        async def fake_profile(cfg, client, access_token):
+            return oauth_desktop_svc.ProviderUserProfile(
+                external_id="linuxdo-login-user-1",
+                email="linuxdo@example.com",
+                username="linuxdo-user",
+                display_name="LinuxDo Login User",
+                avatar_url="https://example.com/avatar-linuxdo.png",
+            )
+
+        monkeypatch.setattr(oauth_desktop_svc, "_exchange_provider_code", fake_exchange)
+        monkeypatch.setattr(oauth_desktop_svc, "_fetch_provider_profile", fake_profile)
+
+        start = await client.post(
+            "/api/v1/auth/oauth/desktop/start",
+            json={"provider": "linuxdo", "return_scheme": "deeting", "platform": "desktop"},
+        )
+        assert start.status_code == 200
+        start_data = start.json()
+        parsed = urllib.parse.urlparse(start_data["authorize_url"])
+        qs = urllib.parse.parse_qs(parsed.query)
+        state = qs["state"][0]
+
+        callback = await client.get(
+            f"/api/v1/auth/oauth/linuxdo/callback?code=test-code&state={state}",
+            follow_redirects=False,
+        )
+        assert callback.status_code == 307
+        redirect = callback.headers["location"]
+        assert redirect.startswith("deeting://auth/callback?")
+        redirect_qs = urllib.parse.parse_qs(urllib.parse.urlparse(redirect).query)
+        assert redirect_qs["provider"][0] == "linuxdo"
+        grant = redirect_qs["grant"][0]
+
+        exchange = await client.post(
+            "/api/v1/auth/oauth/desktop/exchange",
+            json={
+                "provider": "linuxdo",
+                "session_id": start_data["session_id"],
+                "state": state,
+                "grant": grant,
+            },
+        )
+        assert exchange.status_code == 200
+        payload = exchange.json()
+        assert payload["access_token"]
+        assert payload["refresh_token"]
+        assert payload["token_type"] == "bearer"
+        assert payload["user"]["email"] == "linuxdo@example.com"
+
+        async with AsyncSessionLocal() as session:
+            oauth_session = await session.get(DesktopOAuthSession, UUID(start_data["session_id"]))
+            assert oauth_session is not None
+            assert oauth_session.provider == "linuxdo"
+            assert oauth_session.status == oauth_desktop_svc.SESSION_STATUS_EXCHANGED
+    finally:
+        app.dependency_overrides.clear()
+        app.dependency_overrides.update(prev_overrides)
+
+
 @pytest.mark.asyncio
 async def test_desktop_oauth_bind_callback_and_confirm(
     monkeypatch,
@@ -126,6 +314,15 @@ async def test_desktop_bind_start_rejects_unknown_provider(
     response = await client.post(
         "/api/v1/auth/oauth/desktop/bind/start",
         headers={"Authorization": f"Bearer {auth_tokens['access_token']}"},
+        json={"provider": "unknown", "return_scheme": "deeting", "platform": "desktop"},
+    )
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_desktop_login_start_rejects_unknown_provider(client: AsyncClient):
+    response = await client.post(
+        "/api/v1/auth/oauth/desktop/start",
         json={"provider": "unknown", "return_scheme": "deeting", "platform": "desktop"},
     )
     assert response.status_code == 404

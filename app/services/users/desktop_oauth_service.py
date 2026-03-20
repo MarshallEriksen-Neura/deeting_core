@@ -18,6 +18,7 @@ from app.core.config import settings
 from app.models import DesktopOAuthGrant, DesktopOAuthSession, Identity, User
 from app.repositories import UserRepository
 from app.services.users.auth_service import AuthService
+from app.services.users.oauth_linuxdo_service import _build_avatar_url
 from app.services.users.user_provisioning_service import UserProvisioningService
 from app.utils.time_utils import Datetime
 
@@ -342,6 +343,17 @@ class DesktopOAuthService:
                 emails_endpoint=settings.GITHUB_EMAILS_ENDPOINT,
                 scopes=("read:user", "user:email"),
             ),
+            "linuxdo": DesktopOAuthProviderConfig(
+                provider="linuxdo",
+                enabled=settings.LINUXDO_OAUTH_ENABLED,
+                client_id=settings.LINUXDO_CLIENT_ID,
+                client_secret=settings.LINUXDO_CLIENT_SECRET,
+                redirect_uri=settings.LINUXDO_REDIRECT_URI,
+                authorize_endpoint=settings.LINUXDO_AUTHORIZE_ENDPOINT,
+                token_endpoint=settings.LINUXDO_TOKEN_ENDPOINT,
+                userinfo_endpoint=settings.LINUXDO_USERINFO_ENDPOINT,
+                scopes=("openid", "profile", "email"),
+            ),
         }
         cfg = configs.get(normalized)
         if not cfg:
@@ -482,10 +494,26 @@ async def _fetch_provider_profile(
             avatar_url=_optional_text(data.get("picture")),
         )
 
-    external_id = str(data.get("id") or "")
+    userinfo = data.get("user") if isinstance(data.get("user"), dict) else data
+    if cfg.provider == "linuxdo":
+        external_id = str(userinfo.get("id") or "")
+        if not external_id:
+            raise DesktopOAuthError("linuxdo userinfo missing id", status.HTTP_502_BAD_GATEWAY)
+        return ProviderUserProfile(
+            external_id=external_id,
+            email=_optional_text(userinfo.get("email")),
+            username=_optional_text(userinfo.get("username")) or _optional_text(userinfo.get("login")),
+            display_name=_optional_text(userinfo.get("name"))
+            or _optional_text(userinfo.get("username"))
+            or _optional_text(userinfo.get("login")),
+            avatar_url=_optional_text(userinfo.get("avatar_url"))
+            or _build_avatar_url(userinfo.get("avatar_template")),
+        )
+
+    external_id = str(userinfo.get("id") or "")
     if not external_id:
         raise DesktopOAuthError("github userinfo missing id", status.HTTP_502_BAD_GATEWAY)
-    email = _optional_text(data.get("email"))
+    email = _optional_text(userinfo.get("email"))
     if not email and cfg.emails_endpoint:
         emails_resp = await client.get(cfg.emails_endpoint, headers=headers)
         if emails_resp.status_code < 400:
@@ -499,9 +527,9 @@ async def _fetch_provider_profile(
     return ProviderUserProfile(
         external_id=external_id,
         email=email,
-        username=_optional_text(data.get("login")),
-        display_name=_optional_text(data.get("name")) or _optional_text(data.get("login")),
-        avatar_url=_optional_text(data.get("avatar_url")),
+        username=_optional_text(userinfo.get("login")),
+        display_name=_optional_text(userinfo.get("name")) or _optional_text(userinfo.get("login")),
+        avatar_url=_optional_text(userinfo.get("avatar_url")),
     )
 
 
