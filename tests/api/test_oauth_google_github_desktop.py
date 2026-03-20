@@ -1,8 +1,9 @@
+import base64
 import urllib.parse
 from uuid import UUID
 
 import pytest
-from httpx import AsyncClient
+from httpx import AsyncClient, Request, Response
 from sqlalchemy import select
 
 from app.core.config import settings
@@ -37,6 +38,55 @@ def _enable_linuxdo(monkeypatch):
         "https://api.example.com/api/v1/auth/oauth/linuxdo/callback",
     )
     monkeypatch.setattr(settings, "DESKTOP_OAUTH_CALLBACK_SCHEME", "deeting")
+
+
+@pytest.mark.asyncio
+async def test_desktop_linuxdo_token_exchange_uses_basic_auth_and_grant_type():
+    captured: dict[str, object] = {}
+
+    class DummyClient:
+        async def post(self, url, data=None, headers=None):
+            captured["url"] = url
+            captured["data"] = dict(data or {})
+            captured["headers"] = dict(headers or {})
+            return Response(
+                200,
+                request=Request("POST", url),
+                json={"access_token": "linuxdo-access-token", "token_type": "bearer"},
+            )
+
+    cfg = oauth_desktop_svc.DesktopOAuthProviderConfig(
+        provider="linuxdo",
+        enabled=True,
+        client_id="linuxdo-client",
+        client_secret="linuxdo-secret",
+        redirect_uri="https://api.example.com/api/v1/auth/oauth/linuxdo/callback",
+        authorize_endpoint="https://connect.linux.do/oauth2/authorize",
+        token_endpoint="https://connect.linux.do/oauth2/token",
+        userinfo_endpoint="https://connect.linux.do/api/user",
+        scopes=("openid", "profile", "email"),
+    )
+
+    token = await oauth_desktop_svc._exchange_provider_code(
+        cfg,
+        DummyClient(),
+        code="test-code",
+        code_verifier="test-verifier",
+    )
+
+    assert token.access_token == "linuxdo-access-token"
+    assert captured["url"] == "https://connect.linux.do/oauth2/token"
+    assert captured["data"] == {
+        "grant_type": "authorization_code",
+        "code": "test-code",
+        "redirect_uri": "https://api.example.com/api/v1/auth/oauth/linuxdo/callback",
+        "code_verifier": "test-verifier",
+    }
+    expected_basic = base64.b64encode(b"linuxdo-client:linuxdo-secret").decode("utf-8")
+    assert captured["headers"] == {
+        "Accept": "application/json",
+        "Authorization": f"Basic {expected_basic}",
+    }
 
 
 @pytest.mark.asyncio

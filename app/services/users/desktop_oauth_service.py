@@ -445,14 +445,19 @@ async def _exchange_provider_code(
     code_verifier: str,
 ) -> ProviderToken:
     payload = {
-        "client_id": cfg.client_id,
-        "client_secret": cfg.client_secret,
         "code": code,
         "redirect_uri": cfg.redirect_uri,
     }
+    headers = {"Accept": "application/json"}
+    if cfg.provider == "linuxdo":
+        payload["grant_type"] = "authorization_code"
+        basic = base64.b64encode(f"{cfg.client_id}:{cfg.client_secret}".encode("utf-8")).decode("utf-8")
+        headers["Authorization"] = f"Basic {basic}"
+    else:
+        payload["client_id"] = cfg.client_id
+        payload["client_secret"] = cfg.client_secret
     if cfg.uses_pkce:
         payload["code_verifier"] = code_verifier
-    headers = {"Accept": "application/json"}
     response = await client.post(cfg.token_endpoint, data=payload, headers=headers)
     if response.status_code >= 400:
         raise DesktopOAuthError(
