@@ -190,7 +190,6 @@ def register_routes(app: FastAPI) -> None:
         notification_ws_router,
         plugin_market_router,
         provider_router,
-        public_image_share_router,
         settings_router,
         spec_agent_router,
         system_assets_router,
@@ -350,9 +349,6 @@ def register_routes(app: FastAPI) -> None:
     )
     app.include_router(
         internal_sandbox_router, prefix=f"{api_prefix}/internal", tags=["Sandbox"]
-    )
-    app.include_router(
-        public_image_share_router, prefix=api_prefix, tags=["Public Image Share"]
     )
     app.include_router(provider_router, prefix=api_prefix, tags=["Providers"])
     app.include_router(media_router, prefix=api_prefix, tags=["Media"])
