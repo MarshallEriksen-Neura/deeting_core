@@ -4,6 +4,7 @@ from unittest.mock import Mock
 
 import pytest
 import pytest_asyncio
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
@@ -145,6 +146,83 @@ async def test_save_provider_field_mapping_enqueues_index(
 
     assert result["status"] == "success"
     enqueue.assert_called_once_with("openai")
+
+
+@pytest.mark.asyncio
+async def test_save_provider_to_marketplace_upserts_cloud_preset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "app.agent_plugins.builtins.provider_registry.plugin.AsyncSessionLocal",
+        AsyncSessionLocal,
+    )
+    enqueue = Mock()
+    monkeypatch.setattr(
+        "app.tasks.search_index.upsert_provider_preset_task.delay", enqueue
+    )
+
+    invalidated: list[str] = []
+
+    async def _record_invalidation(self, slug: str) -> None:
+        invalidated.append(slug)
+
+    monkeypatch.setattr(
+        "app.core.cache_invalidation.CacheInvalidator.on_preset_updated",
+        _record_invalidation,
+    )
+
+    admin_id = uuid.uuid4()
+    async with AsyncSessionLocal() as session:
+        session.add(
+            User(
+                id=admin_id,
+                email="market-admin@example.com",
+                username="market-admin",
+                hashed_password="x",
+                is_superuser=True,
+            )
+        )
+        await session.commit()
+
+    plugin = ProviderRegistryPlugin()
+    await plugin.initialize(DummyContext(admin_id))
+
+    tools = plugin.get_tools()
+    tool_names = [tool.get("function", {}).get("name") for tool in tools]
+    assert "save_provider_to_marketplace" in tool_names
+
+    result = await plugin.handle_save_provider_to_marketplace(
+        slug="custom-http-market",
+        name="Custom HTTP Market",
+        provider="custom",
+        base_url="https://api.custom-http.example",
+        category="Cloud API",
+        icon="lucide:server",
+        theme_color="#556677",
+        protocol_profiles={"chat": {"protocol_family": "openai_chat"}},
+    )
+
+    assert result == {
+        "status": "success",
+        "slug": "custom-http-market",
+        "updated": False,
+    }
+
+    async with AsyncSessionLocal() as session:
+        preset = (
+            await session.execute(
+                select(ProviderPreset).where(ProviderPreset.slug == "custom-http-market")
+            )
+        ).scalars().first()
+
+    assert preset is not None
+    assert preset.name == "Custom HTTP Market"
+    assert preset.provider == "custom"
+    assert preset.base_url == "https://api.custom-http.example"
+    assert preset.category == "Cloud API"
+    assert preset.protocol_profiles == {"chat": {"protocol_family": "openai_chat"}}
+    assert invalidated == ["custom-http-market"]
+    enqueue.assert_called_once_with("custom-http-market")
 
 
 @pytest.mark.asyncio

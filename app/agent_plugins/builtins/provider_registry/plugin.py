@@ -7,6 +7,7 @@ from jinja2 import BaseLoader, Environment
 from sqlalchemy import select
 
 from app.agent_plugins.core.interfaces import AgentPlugin, PluginMetadata
+from app.core.cache_invalidation import CacheInvalidator
 from app.core.database import AsyncSessionLocal
 from app.core.http_client import create_async_http_client
 from app.models.provider_preset import ProviderPreset
@@ -70,6 +71,33 @@ class ProviderRegistryPlugin(AgentPlugin):
                             "request_template": {"type": "object"},
                         },
                         "required": ["base_url", "test_api_key", "request_template"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "save_provider_to_marketplace",
+                    "description": "Create or update a cloud marketplace provider preset so it appears in the provider market.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "slug": {"type": "string"},
+                            "name": {"type": "string"},
+                            "provider": {"type": "string"},
+                            "base_url": {"type": "string"},
+                            "category": {"type": "string"},
+                            "url_template": {"type": "string"},
+                            "theme_color": {"type": "string"},
+                            "icon": {"type": "string"},
+                            "auth_type": {"type": "string"},
+                            "auth_config": {"type": "object"},
+                            "protocol_schema_version": {"type": "string"},
+                            "protocol_profiles": {"type": "object"},
+                            "version": {"type": "integer"},
+                            "is_active": {"type": "boolean"},
+                        },
+                        "required": ["slug", "name", "provider", "base_url"],
                     },
                 },
             },
@@ -179,6 +207,83 @@ class ProviderRegistryPlugin(AgentPlugin):
                 "body": normalized_body,
             },
             "response_preview": getattr(response, "text", "")[:500],
+        }
+
+    async def handle_save_provider_to_marketplace(
+        self,
+        *,
+        slug: str,
+        name: str,
+        provider: str,
+        base_url: str,
+        category: str | None = None,
+        url_template: str | None = None,
+        theme_color: str | None = None,
+        icon: str | None = None,
+        auth_type: str | None = None,
+        auth_config: dict[str, Any] | None = None,
+        protocol_schema_version: str | None = None,
+        protocol_profiles: dict[str, Any] | None = None,
+        version: int | None = None,
+        is_active: bool = True,
+        **_: Any,
+    ) -> dict[str, Any]:
+        await self._require_admin()
+
+        normalized_payload = {
+            "slug": str(slug or "").strip(),
+            "name": str(name or "").strip(),
+            "provider": str(provider or "").strip(),
+            "category": category,
+            "base_url": str(base_url or "").strip(),
+            "url_template": url_template,
+            "theme_color": theme_color,
+            "icon": icon or "lucide:cpu",
+            "auth_type": auth_type or "api_key",
+            "auth_config": auth_config or {},
+            "protocol_schema_version": protocol_schema_version,
+            "protocol_profiles": protocol_profiles or {},
+            "version": int(version or 1),
+            "is_active": bool(is_active),
+        }
+
+        if not (
+            normalized_payload["slug"]
+            and normalized_payload["name"]
+            and normalized_payload["provider"]
+            and normalized_payload["base_url"]
+        ):
+            return {
+                "status": "error",
+                "message": "slug, name, provider, and base_url are required",
+            }
+
+        async with AsyncSessionLocal() as session:
+            preset = (
+                await session.execute(
+                    select(ProviderPreset).where(
+                        ProviderPreset.slug == normalized_payload["slug"]
+                    )
+                )
+            ).scalars().first()
+
+            if preset is None:
+                session.add(ProviderPreset(**normalized_payload))
+                updated = False
+            else:
+                updated = True
+                for key, value in normalized_payload.items():
+                    setattr(preset, key, value)
+                session.add(preset)
+
+            await session.commit()
+
+        await CacheInvalidator().on_preset_updated(normalized_payload["slug"])
+        upsert_provider_preset_task.delay(normalized_payload["slug"])
+        return {
+            "status": "success",
+            "slug": normalized_payload["slug"],
+            "updated": updated,
         }
 
     async def handle_save_provider_field_mapping(
