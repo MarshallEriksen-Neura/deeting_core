@@ -50,6 +50,28 @@ class ProviderPresetPatchRequest(BaseSchema):
     is_active: bool | None = None
 
 
+class ProviderPresetCreateRequest(BaseSchema):
+    slug: str
+    name: str
+    provider: str
+    base_url: str
+    category: str | None = None
+    url_template: str | None = None
+    theme_color: str | None = None
+    icon: str | None = None
+    auth_type: str | None = None
+    auth_config: dict[str, Any] = Field(default_factory=dict)
+    protocol_schema_version: str | None = None
+    protocol_profiles: dict[str, Any] = Field(default_factory=dict)
+    version: int = 1
+    is_active: bool = True
+
+
+class ProviderPresetDeleteResponse(BaseSchema):
+    status: str
+    slug: str
+
+
 class ProviderPresetVerifyRequest(BaseSchema):
     capability: str = "chat"
     api_key: str

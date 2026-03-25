@@ -1,7 +1,8 @@
 from types import SimpleNamespace
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.cache_invalidation import CacheInvalidator
@@ -9,6 +10,7 @@ from app.core.database import get_db
 from app.core.http_client import create_async_http_client
 from app.core.logging import logger
 from app.deps.superuser import get_current_superuser
+from app.models.provider_instance import ProviderInstance
 from app.models.provider_preset import ProviderPreset
 from app.protocols.canonical.models import CanonicalRequest
 from app.protocols.runtime.profile_resolver import build_protocol_profile
@@ -16,6 +18,8 @@ from app.protocols.runtime.runtime_service import protocol_runtime_service
 from app.protocols.runtime.transport_executor import execute_upstream_request
 from app.repositories.provider_preset_repository import ProviderPresetRepository
 from app.schemas.provider_preset import (
+    ProviderPresetCreateRequest,
+    ProviderPresetDeleteResponse,
     ProviderPresetDTO,
     ProviderPresetDesktopUpsertRequest,
     ProviderPresetDesktopUpsertResponse,
@@ -24,7 +28,7 @@ from app.schemas.provider_preset import (
     ProviderPresetVerifyResponse,
     ProviderWish,
 )
-from app.tasks.search_index import upsert_provider_preset_task
+from app.tasks.search_index import delete_provider_preset_task, upsert_provider_preset_task
 
 router = APIRouter(prefix="/admin/provider-presets", tags=["ProviderPresets"])
 
@@ -48,6 +52,71 @@ async def get_preset(
     preset = await repo.get_by_slug(slug)
     if preset is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="provider_preset_not_found")
+    return preset
+
+
+@router.post("", response_model=ProviderPresetDTO, status_code=status.HTTP_201_CREATED)
+async def create_preset(
+    payload: ProviderPresetCreateRequest,
+    db: AsyncSession = Depends(get_db),
+    _user=Depends(get_current_superuser),
+):
+    normalized_payload = {
+        "slug": str(payload.slug or "").strip(),
+        "name": str(payload.name or "").strip(),
+        "provider": str(payload.provider or "").strip(),
+        "category": payload.category,
+        "base_url": str(payload.base_url or "").strip(),
+        "url_template": payload.url_template,
+        "theme_color": payload.theme_color,
+        "icon": payload.icon or "lucide:cpu",
+        "auth_type": payload.auth_type or "api_key",
+        "auth_config": payload.auth_config or {},
+        "protocol_schema_version": payload.protocol_schema_version,
+        "protocol_profiles": _normalize_protocol_profiles(
+            provider=str(payload.provider or "").strip(),
+            protocol_profiles=payload.protocol_profiles or {},
+        ),
+        "version": int(payload.version or 1),
+        "is_active": bool(payload.is_active),
+    }
+
+    if not (
+        normalized_payload["slug"]
+        and normalized_payload["name"]
+        and normalized_payload["provider"]
+        and normalized_payload["base_url"]
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="slug, name, provider, and base_url are required",
+        )
+
+    existing = await db.execute(
+        select(ProviderPreset).where(
+            (ProviderPreset.slug == normalized_payload["slug"])
+            | (ProviderPreset.name == normalized_payload["name"])
+        )
+    )
+    if existing.scalars().first() is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="provider_preset_slug_or_name_exists",
+        )
+
+    preset = ProviderPreset(**normalized_payload)
+    db.add(preset)
+    try:
+        await db.commit()
+    except IntegrityError as error:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="provider_preset_create_conflict",
+        ) from error
+    await db.refresh(preset)
+    await CacheInvalidator().on_preset_updated(preset.slug)
+    upsert_provider_preset_task.delay(preset.slug)
     return preset
 
 
@@ -92,6 +161,40 @@ async def patch_preset(
     await CacheInvalidator().on_preset_updated(preset.slug)
     upsert_provider_preset_task.delay(preset.slug)
     return preset
+
+
+@router.delete("/{slug}", response_model=ProviderPresetDeleteResponse)
+async def delete_preset(
+    slug: str,
+    db: AsyncSession = Depends(get_db),
+    _user=Depends(get_current_superuser),
+):
+    repo = ProviderPresetRepository(db)
+    preset = await repo.get_by_slug(slug)
+    if preset is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="provider_preset_not_found",
+        )
+
+    blocked_count = (
+        await db.execute(
+            select(func.count())
+            .select_from(ProviderInstance)
+            .where(ProviderInstance.preset_slug == slug)
+        )
+    ).scalar_one()
+    if blocked_count:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"provider_preset_in_use:{blocked_count}",
+        )
+
+    await db.delete(preset)
+    await db.commit()
+    await CacheInvalidator().on_preset_updated(slug)
+    delete_provider_preset_task.delay(slug)
+    return ProviderPresetDeleteResponse(status="deleted", slug=slug)
 
 
 @router.post("/{slug}/verify", response_model=ProviderPresetVerifyResponse)

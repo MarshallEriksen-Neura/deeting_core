@@ -4,7 +4,7 @@ import httpx
 import pytest
 from sqlalchemy import select
 
-from app.models import ProviderPreset
+from app.models import ProviderInstance, ProviderPreset
 from app.protocols.runtime.transport_executor import UpstreamRequest
 from tests.utils.provider_protocol_profiles import build_protocol_profiles
 
@@ -237,3 +237,88 @@ async def test_admin_provider_preset_verify_renders_skeleton_request_with_temp_a
     assert upstream_request.headers["Authorization"] == "Bearer test-secret"
     assert upstream_request.body["model"] == "doubao-1-5-lite-32k-250115"
     assert upstream_request.body["messages"][0]["content"] == "ping"
+
+
+@pytest.mark.asyncio
+async def test_admin_provider_preset_create_and_delete_flow(
+    client, admin_tokens, AsyncSessionLocal
+):
+    headers = {"Authorization": f"Bearer {admin_tokens['access_token']}"}
+    slug = f"created-{uuid4().hex[:8]}"
+
+    create_response = await client.post(
+        "/api/v1/admin/provider-presets",
+        headers=headers,
+        json={
+            "slug": slug,
+            "name": "Created Provider",
+            "provider": "custom",
+            "base_url": "https://create.example.com",
+            "auth_type": "bearer",
+            "protocol_profiles": {
+                "chat": {
+                    "protocol_family": "openai_chat",
+                    "template_engine": "openai_compat",
+                    "request_builder": "openai_chat_messages_from_canonical",
+                    "upstream_path": "chat/completions",
+                }
+            },
+        },
+    )
+    assert create_response.status_code == 201
+    assert create_response.json()["slug"] == slug
+
+    delete_response = await client.delete(
+        f"/api/v1/admin/provider-presets/{slug}",
+        headers=headers,
+    )
+    assert delete_response.status_code == 200
+    assert delete_response.json()["status"] == "deleted"
+
+
+@pytest.mark.asyncio
+async def test_admin_provider_preset_delete_is_blocked_when_instances_exist(
+    client, admin_tokens, AsyncSessionLocal
+):
+    slug = f"blocked-{uuid4().hex[:8]}"
+    async with AsyncSessionLocal() as session:
+        session.add(
+            ProviderPreset(
+                name="Blocked Delete",
+                slug=slug,
+                provider="custom",
+                category="Cloud API",
+                base_url="https://blocked.example.com",
+                auth_type="api_key",
+                auth_config={},
+                protocol_schema_version="2026-03-07",
+                protocol_profiles={},
+                icon="lucide:cpu",
+                version=1,
+                is_active=True,
+            )
+        )
+        await session.flush()
+        session.add(
+            ProviderInstance(
+                preset_slug=slug,
+                name="Blocked Instance",
+                description=None,
+                base_url="https://blocked.example.com",
+                icon=None,
+                credentials_ref="db:test",
+                priority=0,
+                is_enabled=True,
+                is_public=False,
+                meta={},
+            )
+        )
+        await session.commit()
+
+    headers = {"Authorization": f"Bearer {admin_tokens['access_token']}"}
+    response = await client.delete(
+        f"/api/v1/admin/provider-presets/{slug}",
+        headers=headers,
+    )
+    assert response.status_code == 409
+    assert "provider_preset_in_use" in response.json()["detail"]
