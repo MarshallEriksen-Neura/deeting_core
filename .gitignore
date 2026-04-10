@@ -29,3 +29,6 @@ celerybeat-schedule-wal
 tmp.db
 *.db
 .python-version
+
+# 重建脚本（本地用）
+scripts/rebuild-api.sh
