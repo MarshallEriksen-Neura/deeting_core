@@ -32,7 +32,7 @@ _CODE_MODE_TOOL_NAMES = {
     "activate_assistant",
     "deactivate_assistant",
 }
-_CODE_MODE_DEFAULT_DIRECT_ALLOWLIST = {"consult_expert_network", "search_knowledge"}
+_CODE_MODE_DEFAULT_DIRECT_ALLOWLIST = {"consult_expert_network"}
 
 
 @step_registry.register

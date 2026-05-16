@@ -22,19 +22,6 @@ plugins:
   #     - "convert_artifact_to_assistant"
   #     - "batch_convert_artifact_to_assistants"
 
-  # === Core Memory (Qdrant) ===
-  # Migrated to packages/official-skills/memory
-  # - id: "system/vector_store"
-  #   name: "Vector Memory"
-  #   module: "app.agent_plugins.builtins.vector_store.plugin"
-  #   class_name: "VectorStorePlugin"
-  #   enabled_by_default: true
-  #   is_always_on: true
-  #   description: "Semantic search and long-term memory management."
-  #   tools:
-  #     - "search_knowledge"
-  #     - "add_knowledge_chunk"
-
   # === Core Administration (Provider) ===
   # Migrated to packages/official-skills/provider-registry
   # - id: "core.registry.provider"

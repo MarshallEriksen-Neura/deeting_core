@@ -114,7 +114,7 @@ def test_should_block_direct_tool_call_when_code_mode_available():
             tool_name="search_knowledge",
             user_mcp_tool_map={},
         )
-        is False
+        is True
     )
     assert (
         step._should_block_direct_tool_call(

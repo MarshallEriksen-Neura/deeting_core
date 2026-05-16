@@ -14,7 +14,6 @@ logger = logging.getLogger(__name__)
 
 _LEGACY_SKILL_ID_ALIASES: dict[str, str] = {
     "core.tools.crawler": "official.skills.crawler",
-    "core.tools.search": "official.skills.memory",
     "core.registry.provider": "official.skills.provider_registry",
     "system.image_generation": "official.skills.image_generation",
     "system.expert_network": "official.skills.expert_network",

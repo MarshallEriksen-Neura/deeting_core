@@ -396,18 +396,7 @@ class TemplateRenderStep(BaseStep):
             enhanced_prompt += knowledge_block
 
 
-        # 2. 注入记忆能力提醒 (Memory Reminder)
-        if tools and any(t.name == "search_knowledge" for t in tools):
-            memory_reminder = (
-                "\n\n**Memory Capability**:\n"
-                "You have access to a long-term memory via the 'search_knowledge' tool. "
-                "If the user asks about past interactions, personal preferences, or facts you should know, "
-                "you MUST use this tool to retrieve relevant information before answering."
-            )
-            # 这里使用 += 因为上面已经初始化过 enhanced_prompt (至少包含时间)
-            enhanced_prompt += memory_reminder
-
-        # 2.1 注入 Code Mode 提醒（P1/P2）
+        # 2. 注入 Code Mode 提醒（P1/P2）
         if tools:
             tool_names = {t.name for t in tools}
             if {"search_sdk", "execute_code_plan"}.issubset(tool_names):
