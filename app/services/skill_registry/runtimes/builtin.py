@@ -77,7 +77,6 @@ class BuiltinSkillRuntimeStrategy(BaseRuntimeStrategy):
             python_exe = str(venv_python)
 
         base_env = os.environ.copy()
-        base_env["SCOUT_SERVICE_URL"] = str(settings.SCOUT_SERVICE_URL)
         base_env["PYTHONPATH"] = os.pathsep.join([
             str(project_root / "packages" / "deeting-sdk"),
             base_env.get("PYTHONPATH", "")

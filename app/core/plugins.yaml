@@ -6,22 +6,6 @@
 # They are now dynamically discovered via SkillRegistry and executed via SkillRuntimeExecutor.
 
 plugins:
-  # === Core Sensors (Scout) ===
-  # Migrated to packages/official-skills/crawler
-  # - id: "core.tools.crawler"
-  #   name: "Scout (Web Crawler)"
-  #   module: "app.agent_plugins.builtins.crawler.plugin"
-  #   class_name: "CrawlerPlugin"
-  #   enabled_by_default: true
-  #   description: "Deep web crawling, site ingestion, and documentation learning."
-  #   tools:
-  #     - "fetch_web_content"
-  #     - "crawl_website"
-  #     - "submit_repo_ingestion"
-  #     - "poll_repo_ingestion"
-  #     - "convert_artifact_to_assistant"
-  #     - "batch_convert_artifact_to_assistants"
-
   # === Core Administration (Provider) ===
   # Migrated to packages/official-skills/provider-registry
   # - id: "core.registry.provider"

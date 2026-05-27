@@ -209,45 +209,6 @@ def run_probe(
     )
 
 
-def run_local_scout_probe(
-    *,
-    scout_service_url: str,
-    target_url: str,
-    timeout_seconds: int,
-) -> ProbeResult:
-    body_path = "/tmp/bridge_smoke_scout.body.json"
-    payload = json.dumps({"url": target_url, "js_mode": True}, ensure_ascii=False)
-    endpoint = f"{scout_service_url.rstrip('/')}/v1/scout/inspect"
-    cmd = [
-        "curl",
-        "-sS",
-        "-m",
-        str(timeout_seconds),
-        "-o",
-        body_path,
-        "-w",
-        "HTTP_CODE:%{http_code}\nTOTAL:%{time_total}\n",
-        "-X",
-        "POST",
-        endpoint,
-        "-H",
-        "Content-Type: application/json",
-        "--data-binary",
-        payload,
-    ]
-    proc = run_cmd(cmd, check=False)
-    metrics_source = f"{proc.stdout}\n{proc.stderr}"
-    http_code, total = _parse_curl_metrics(metrics_source)
-    body_proc = run_cmd(["cat", body_path], check=False)
-    return ProbeResult(
-        name="direct_scout_inspect",
-        http_code=http_code,
-        total_seconds=total,
-        body=body_proc.stdout.strip(),
-        curl_exit_code=proc.returncode,
-        stderr=proc.stderr.strip(),
-    )
-
 
 def format_seconds(value: float | None) -> str:
     if value is None:
@@ -261,7 +222,6 @@ def analyze(
     no_token_result: ProbeResult,
     unknown_tool_result: ProbeResult,
     target_tool_result: ProbeResult,
-    direct_scout_result: ProbeResult | None = None,
 ) -> list[str]:
     findings: list[str] = []
     if get_result.http_code == "000":
@@ -292,12 +252,6 @@ def analyze(
     else:
         findings.append(f"目标工具返回 HTTP {target_tool_result.http_code}，需结合 body 继续判断。")
 
-    if direct_scout_result:
-        scout_body = (direct_scout_result.body or "").lower()
-        if direct_scout_result.http_code == "200" and ("err_timed_out" in scout_body or "timed out" in scout_body):
-            findings.append("直连 Scout 也出现相同超时，根因在 Scout/crawl4ai，而非 bridge。")
-        elif direct_scout_result.http_code == "000":
-            findings.append("直连 Scout 不可达，需先排查 SCOUT_SERVICE_URL。")
     return findings
 
 
@@ -331,7 +285,6 @@ def main() -> int:
     cache_prefix = env_data.get("CACHE_PREFIX", "ai_gateway:").strip().strip('"').strip("'")
     if not cache_prefix:
         cache_prefix = "ai_gateway:"
-    scout_service_url = env_data.get("SCOUT_SERVICE_URL", "").strip().strip('"').strip("'")
 
     try:
         tool_args = json.loads(args.args_json)
@@ -405,18 +358,6 @@ def main() -> int:
         payload={"tool_name": str(args.tool), "arguments": tool_args},
         token=token,
     )
-    direct_scout_result: ProbeResult | None = None
-    if (
-        scout_service_url
-        and str(args.tool).strip() == "fetch_web_content"
-        and isinstance(tool_args.get("url"), str)
-        and str(tool_args.get("url")).strip()
-    ):
-        direct_scout_result = run_local_scout_probe(
-            scout_service_url=scout_service_url,
-            target_url=str(tool_args.get("url")),
-            timeout_seconds=int(args.timeout_seconds),
-        )
 
     if not args.keep_token:
         delete_token_in_redis(
@@ -430,7 +371,6 @@ def main() -> int:
         no_token_result=no_token_result,
         unknown_tool_result=unknown_tool_result,
         target_tool_result=target_tool_result,
-        direct_scout_result=direct_scout_result,
     )
 
     print("=== Bridge Smoke Summary ===")
@@ -441,8 +381,6 @@ def main() -> int:
     print("")
 
     rows = [get_result, no_token_result, unknown_tool_result, target_tool_result]
-    if direct_scout_result:
-        rows.append(direct_scout_result)
     for row in rows:
         print(
             f"[{row.name}] http={row.http_code} "

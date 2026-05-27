@@ -400,9 +400,6 @@ class Settings(BaseSettings):
     DECISION_THOMPSON_PRIOR_ALPHA: float = 1.0
     DECISION_THOMPSON_PRIOR_BETA: float = 1.0
 
-    # Scout Service (Cognitive Engine)
-    SCOUT_SERVICE_URL: str = "http://scout:8001"
-
     # OpenSandbox Configuration
     OPENSANDBOX_URL: str = "http://localhost:8080"
     OPENSANDBOX_IMAGE: str = "opensandbox/code-interpreter:v1.0.1"

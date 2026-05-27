@@ -20,7 +20,7 @@ from .provider_preset import JSONBCompat
 class KnowledgeArtifact(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     """
     Knowledge Artifact (知识原件)
-    存储从 Scout 爬取回来的原始知识，作为 RAG 和 自动化配置的源头。
+    存储原始知识，作为 RAG 和 自动化配置的源头。
     """
 
     __tablename__ = "knowledge_artifact"

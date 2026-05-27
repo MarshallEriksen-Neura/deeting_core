@@ -45,15 +45,15 @@ async def test_run_seed_builtins_disables_missing_builtin_skills(
     tmp_path: Path,
 ) -> None:
     project_root = tmp_path / "repo"
-    official_skill_dir = project_root / "packages" / "official-skills" / "crawler"
+    official_skill_dir = project_root / "packages" / "official-skills" / "monitor"
     official_skill_dir.mkdir(parents=True)
     (official_skill_dir / "deeting.json").write_text(
         json.dumps(
             {
-                "id": "official.skills.crawler",
-                "name": "Scout Crawler",
+                "id": "official.skills.monitor",
+                "name": "Monitor",
                 "version": "1.0.0",
-                "description": "Crawl websites",
+                "description": "Monitor tasks",
             }
         ),
         encoding="utf-8",
@@ -100,8 +100,8 @@ async def test_run_seed_builtins_disables_missing_builtin_skills(
         assert retired_skill.status == "disabled"
 
         result = await session.execute(
-            select(SkillRegistry).where(SkillRegistry.id == "official.skills.crawler")
+            select(SkillRegistry).where(SkillRegistry.id == "official.skills.monitor")
         )
-        crawler_skill = result.scalar_one()
-        assert crawler_skill.status == "active"
-        assert crawler_skill.runtime == "builtin"
+        monitor_skill = result.scalar_one()
+        assert monitor_skill.status == "active"
+        assert monitor_skill.runtime == "builtin"
